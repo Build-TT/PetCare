@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { summarizeSymptoms } from './domain/summary.js'
+import { loadStoredState, saveStoredState } from './domain/storage.js'
 import './index.css'
 
 const nowLocal = () => new Date().toISOString().slice(0, 16)
@@ -35,19 +36,24 @@ function Summary({ logs, onEdit, onDelete }) {
 }
 
 function App() {
+  const initial = loadStoredState(window.localStorage, 'petcare.local.v1', { tracks: seedTracks, logs: seedLogs, reminders: null })
   const [page, setPage] = useState('home')
   const [pet, setPet] = useState('โมจิ')
   const [trackTab, setTrackTab] = useState('track')
   const [recordsTab, setRecordsTab] = useState('diary')
-  const [tracks, setTracks] = useState(seedTracks)
-  const [logs, setLogs] = useState(seedLogs)
+  const [tracks, setTracks] = useState(initial.tracks ?? seedTracks)
+  const [logs, setLogs] = useState(initial.logs ?? seedLogs)
   const [selectedSymptoms, setSelectedSymptoms] = useState([])
   const [note, setNote] = useState('')
   const [datetime, setDatetime] = useState(nowLocal())
-  const [reminders, setReminders] = useState([{ id: 'r1', title: 'ถ่ายพยาธิ', detail: '01 ส.ค. 2569 · ทุก 3 เดือน', enabled: true }, { id: 'r2', title: 'ตรวจสุขภาพ', detail: 'ทุก 1 ปี · LINE: คุณหมอ', enabled: true }, { id: 'r3', title: 'Echo หัวใจ', detail: 'ทุก 6 เดือน', enabled: true }])
+  const [reminders, setReminders] = useState(initial.reminders ?? [{ id: 'r1', title: 'ถ่ายพยาธิ', detail: '01 ส.ค. 2569 · ทุก 3 เดือน', enabled: true }, { id: 'r2', title: 'ตรวจสุขภาพ', detail: 'ทุก 1 ปี · LINE: คุณหมอ', enabled: true }, { id: 'r3', title: 'Echo หัวใจ', detail: 'ทุก 6 เดือน', enabled: true }])
   const activeTracks = tracks.filter(track => track.active)
   const canSave = selectedSymptoms.length > 0 || note.trim().length > 0
   const health = useMemo(() => ({ symptoms: logs.length, weight: '6.8', walk: '20m' }), [logs])
+
+  useEffect(() => {
+    saveStoredState(window.localStorage, 'petcare.local.v1', { tracks, logs, reminders })
+  }, [tracks, logs, reminders])
 
   const saveLog = () => {
     if (!canSave) return
