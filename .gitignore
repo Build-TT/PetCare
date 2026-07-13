@@ -3,5 +3,6 @@ dist
 .env
 .env.local
 .vercel
+.worktrees
 *.log
 .DS_Store
