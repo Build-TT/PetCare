@@ -22,6 +22,18 @@ var SHEETS = {
   logs: ['id', 'pet_id', 'type', 'datetime', 'detail', 'created_at'],
   med_schedules: ['id', 'pet_id', 'med_name', 'dose', 'schedule_type', 'config', 'time',
                   'start_date', 'last_done', 'next_due', 'active', 'created_at'],
+  app_users: ['id', 'email', 'role', 'active', 'created_at', 'updated_at'],
+  tracking_items: ['id', 'pet_id', 'name', 'active', 'created_at', 'updated_at'],
+  tracking_versions: ['id', 'tracking_item_id', 'pet_id', 'name', 'dose', 'schedule_type', 'schedule_config', 'start_at', 'end_at', 'active', 'created_at', 'updated_at'],
+  symptom_catalog: ['id', 'pet_id', 'label_th', 'label_en', 'active', 'created_at', 'updated_at'],
+  symptom_logs: ['id', 'pet_id', 'occurred_at', 'symptoms_json', 'diary_text', 'tracking_snapshot_json', 'created_at', 'updated_at'],
+  diary_logs: ['id', 'pet_id', 'occurred_at', 'text', 'created_at', 'updated_at'],
+  activity_logs: ['id', 'pet_id', 'activity_type', 'occurred_at', 'duration_minutes', 'weight_kg', 'note', 'created_at', 'updated_at'],
+  treatment_history: ['id', 'pet_id', 'category', 'title', 'started_at', 'ended_at', 'clinic', 'note', 'created_at', 'updated_at'],
+  reminders: ['id', 'pet_id', 'type', 'title', 'schedule_type', 'schedule_config', 'start_at', 'end_at', 'active', 'created_at', 'updated_at'],
+  reminder_recipients: ['id', 'reminder_id', 'recipient_id', 'created_at'],
+  reminder_deliveries: ['id', 'reminder_id', 'recipient_id', 'scheduled_at', 'status', 'response_code', 'created_at'],
+  audit_events: ['id', 'pet_id', 'actor_email', 'action', 'entity_type', 'entity_id', 'created_at'],
 }
 
 var DEFAULT_LOG_TYPES = [
@@ -41,6 +53,8 @@ function setupSheets() {
     if (!sh) sh = ss.insertSheet(name)
     if (sh.getLastRow() === 0) {
       sh.appendRow(SHEETS[name])
+    } else {
+      ensureHeaders(sh, SHEETS[name])
     }
   })
   // seed log_types ถ้ายังว่าง
@@ -48,9 +62,17 @@ function setupSheets() {
   if (lt.getLastRow() <= 1) {
     DEFAULT_LOG_TYPES.forEach(function (r) { lt.appendRow(r) })
   }
-  // ลบ Sheet1 เปล่าทิ้ง ถ้ามี
-  var s1 = ss.getSheetByName('Sheet1')
-  if (s1 && ss.getSheets().length > 1) ss.deleteSheet(s1)
+}
+
+// Adds missing columns only. Existing data and user-created columns are preserved.
+function ensureHeaders(sh, requiredHeaders) {
+  var lastColumn = sh.getLastColumn()
+  var existing = lastColumn ? sh.getRange(1, 1, 1, lastColumn).getValues()[0] : []
+  requiredHeaders.forEach(function (header) {
+    if (existing.indexOf(header) >= 0) return
+    sh.getRange(1, existing.length + 1).setValue(header)
+    existing.push(header)
+  })
 }
 
 // ── trigger ───────────────────────────────────────────────────────────────
