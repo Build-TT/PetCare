@@ -6,7 +6,6 @@ import ManagePets from './liff/ManagePets.jsx'
 import ManageMeds from './liff/ManageMeds.jsx'
 import ManageTypes from './liff/ManageTypes.jsx'
 import PetDetail from './pages/PetDetail.jsx'
-import BottomNav from './components/BottomNav.jsx'
 import './index.css'
 
 // routing ด้วย ?page= และรองรับ liff.state (ตอนเปิดผ่าน LINE)
@@ -30,6 +29,5 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <div style={{ paddingBottom: 64 }}>
       <Router />
     </div>
-    <BottomNav />
   </React.StrictMode>
 )
