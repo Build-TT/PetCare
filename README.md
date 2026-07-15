@@ -26,6 +26,8 @@ The production flow is user-owned and starts from the web app:
 6. On the first connection, PetCare creates `PetCare - <Google email>` in the user’s Drive and creates the schema tabs and headers with no sample health data.
 7. Later connections reuse the existing file and save the current tracker state in the `app_state` tab.
 
+The legacy Apps Script/LIFF write path uses `VITE_GAS_URL` with the deployed `/exec` URL. Do not use `GAS_WEB_APP_URL`, because Vite only exposes variables prefixed with `VITE_` to browser code.
+
 Access tokens stay in memory for the active browser session. The app does not store Google tokens or spreadsheet contents in local storage. Disconnecting does not delete the user’s Sheet.
 
 For development, use a separate Google OAuth client and a test Google account. The first-login test should create a new empty Sheet; a second login should reuse the same Sheet.
