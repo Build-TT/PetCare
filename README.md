@@ -12,16 +12,30 @@ npm.cmd run lint
 npm.cmd run build
 ```
 
-Until Google Sheet credentials are configured, the app stores interactive demo data in browser local storage under `petcare.local.v1`.
+Until Google OAuth is configured, the app runs in demo mode and stores the interactive demo state in browser local storage under `petcare.local.v1`.
 
-## Required production setup
+## Google Sheet auto-connect
 
-1. Create a Google Sheet for one household and share it as **Editor** with the Google account that deploys Google Apps Script.
-2. Copy `gas/Code.gs` into that Apps Script project, run `setupSheets()`, then deploy it as a versioned Web App.
-3. In Apps Script Script Properties set `LINE_TOKEN` and, after connecting the Sheet from Settings, `PETCARE_SPREADSHEET_ID` is stored automatically.
-4. Create a LINE Messaging API channel. Add recipients through follow/message/group-join webhooks; do not enter a display name as a push recipient ID.
-5. In Vercel import `Build-TT/PetCare`, set the required environment variables from `.env.example`, then deploy `main`.
+The production flow is user-owned and starts from the web app:
+
+1. In Google Cloud Console, create an OAuth Web application client.
+2. Add `https://petcare-th.vercel.app` as an authorized JavaScript origin.
+3. Enable Google Sheets API and Google Drive API.
+4. Put the client ID in Vercel as `VITE_GOOGLE_CLIENT_ID`.
+5. Open PetCare, go to Settings → Google Sheet, and press **เชื่อมต่อ Google**.
+6. On the first connection, PetCare creates `PetCare - <Google email>` in the user’s Drive and creates the schema tabs and headers with no sample health data.
+7. Later connections reuse the existing file and save the current tracker state in the `app_state` tab.
+
+The legacy Apps Script/LIFF write path uses `VITE_GAS_URL` with the deployed `/exec` URL. Do not use `GAS_WEB_APP_URL`, because Vite only exposes variables prefixed with `VITE_` to browser code.
+
+Access tokens stay in memory for the active browser session. The app does not store Google tokens or spreadsheet contents in local storage. Disconnecting does not delete the user’s Sheet.
+
+For development, use a separate Google OAuth client and a test Google account. The first-login test should create a new empty Sheet; a second login should reuse the same Sheet.
+
+## LINE reminders
+
+LINE reminders still require a LINE Messaging API channel, channel access token, webhook recipient IDs, and the Apps Script trigger configuration described in `gas/Code.gs`. These credentials must be configured separately and must never be committed.
 
 ## Deployment status
 
-The feature branch is `feat/petcare-production`. Vercel deployment requires a valid Vercel login/token and the Google/LINE credentials above; none are stored in this repository.
+The production branch is `main`. Vercel deployment requires a valid Vercel login/token and the Google/LINE credentials above; none are stored in this repository.

@@ -1,0 +1,5 @@
+.page-content > .setting:nth-of-type(4) { display: none }
+.setting-google { display: block }
+.setting-google button { display: block; margin-top: 6px }
+.setting-google a { display: block; margin-top: 6px; color: #624a3e; font-size: 12px }
+.setting-google small[role="alert"] { display: block; margin-top: 5px }
