@@ -22,7 +22,21 @@ var SHEETS = {
   logs: ['id', 'pet_id', 'type', 'datetime', 'detail', 'created_at'],
   med_schedules: ['id', 'pet_id', 'med_name', 'dose', 'schedule_type', 'config', 'time',
                   'start_date', 'last_done', 'next_due', 'active', 'created_at'],
+  app_users: ['id', 'email', 'role', 'active', 'created_at', 'updated_at'],
+  tracking_items: ['id', 'pet_id', 'name', 'active', 'created_at', 'updated_at'],
+  tracking_versions: ['id', 'tracking_item_id', 'pet_id', 'name', 'dose', 'schedule_type', 'schedule_config', 'start_at', 'end_at', 'active', 'created_at', 'updated_at'],
+  symptom_catalog: ['id', 'pet_id', 'label_th', 'label_en', 'active', 'created_at', 'updated_at'],
+  symptom_logs: ['id', 'pet_id', 'occurred_at', 'symptoms_json', 'diary_text', 'tracking_snapshot_json', 'created_at', 'updated_at'],
+  diary_logs: ['id', 'pet_id', 'occurred_at', 'text', 'created_at', 'updated_at'],
+  activity_logs: ['id', 'pet_id', 'activity_type', 'occurred_at', 'duration_minutes', 'weight_kg', 'note', 'created_at', 'updated_at'],
+  treatment_history: ['id', 'pet_id', 'category', 'title', 'started_at', 'ended_at', 'clinic', 'note', 'created_at', 'updated_at'],
+  reminders: ['id', 'pet_id', 'type', 'title', 'schedule_type', 'schedule_config', 'start_at', 'end_at', 'active', 'created_at', 'updated_at'],
+  reminder_recipients: ['id', 'reminder_id', 'recipient_id', 'created_at'],
+  reminder_deliveries: ['id', 'reminder_id', 'recipient_id', 'scheduled_at', 'status', 'response_code', 'created_at'],
+  audit_events: ['id', 'pet_id', 'actor_email', 'action', 'entity_type', 'entity_id', 'created_at'],
 }
+
+var PETCARE_SPREADSHEET_ID = 'PETCARE_SPREADSHEET_ID'
 
 var DEFAULT_LOG_TYPES = [
   ['med',     'ให้ยา',       'Medicine', '💊', 'FALSE', 'TRUE', '1'],
@@ -35,12 +49,14 @@ var DEFAULT_LOG_TYPES = [
 
 // ── สร้าง tab + headers + seed (รันครั้งเดียวตอนติดตั้ง) ───────────────────
 function setupSheets() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var ss = getSpreadsheet()
   Object.keys(SHEETS).forEach(function (name) {
     var sh = ss.getSheetByName(name)
     if (!sh) sh = ss.insertSheet(name)
     if (sh.getLastRow() === 0) {
       sh.appendRow(SHEETS[name])
+    } else {
+      ensureHeaders(sh, SHEETS[name])
     }
   })
   // seed log_types ถ้ายังว่าง
@@ -48,9 +64,38 @@ function setupSheets() {
   if (lt.getLastRow() <= 1) {
     DEFAULT_LOG_TYPES.forEach(function (r) { lt.appendRow(r) })
   }
-  // ลบ Sheet1 เปล่าทิ้ง ถ้ามี
-  var s1 = ss.getSheetByName('Sheet1')
-  if (s1 && ss.getSheets().length > 1) ss.deleteSheet(s1)
+}
+
+function getSpreadsheet() {
+  var id = PropertiesService.getScriptProperties().getProperty(PETCARE_SPREADSHEET_ID)
+  return id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet()
+}
+
+function connectSpreadsheet(p) {
+  var url = String((p && p.spreadsheet_url) || '')
+  var match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/) || url.match(/^([a-zA-Z0-9-_]{20,})$/)
+  if (!match) return { status: 'error', message: 'invalid spreadsheet URL' }
+  var id = match[1]
+  var ss
+  try {
+    ss = SpreadsheetApp.openById(id)
+  } catch (err) {
+    return { status: 'error', message: 'spreadsheet is not shared with this Apps Script account' }
+  }
+  PropertiesService.getScriptProperties().setProperty(PETCARE_SPREADSHEET_ID, id)
+  setupSheets()
+  return { status: 'ok', spreadsheet_id: ss.getId(), spreadsheet_name: ss.getName() }
+}
+
+// Adds missing columns only. Existing data and user-created columns are preserved.
+function ensureHeaders(sh, requiredHeaders) {
+  var lastColumn = sh.getLastColumn()
+  var existing = lastColumn ? sh.getRange(1, 1, 1, lastColumn).getValues()[0] : []
+  requiredHeaders.forEach(function (header) {
+    if (existing.indexOf(header) >= 0) return
+    sh.getRange(1, existing.length + 1).setValue(header)
+    existing.push(header)
+  })
 }
 
 // ── trigger ───────────────────────────────────────────────────────────────
@@ -70,6 +115,7 @@ function doGet(e) {
     var out
     switch (action) {
       case 'addPet':         out = upsertRow('pets', p, true); break
+      case 'connectSpreadsheet': out = connectSpreadsheet(p); break
       case 'editPet':        out = upsertRow('pets', p, false); break
       case 'deletePet':      out = softDelete('pets', p.id); break
 
@@ -98,7 +144,7 @@ function doGet(e) {
 
 // ── generic row helpers ────────────────────────────────────────────────────
 function getSheet(name) {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  var sh = getSpreadsheet().getSheetByName(name)
   if (!sh) throw new Error('ไม่พบชีต ' + name + ' — รัน setupSheets() ก่อน')
   return sh
 }
@@ -201,7 +247,7 @@ function markMedTaken(p) {
 
 // ── reminder engine (trigger รายชั่วโมง) ───────────────────────────────────
 function checkReminders() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var ss = getSpreadsheet()
   var sh = ss.getSheetByName('med_schedules')
   if (!sh || sh.getLastRow() <= 1) return
   var headers = readHeaders(sh)
@@ -229,7 +275,7 @@ function checkReminders() {
 
 function buildPetNameMap() {
   var map = {}
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('pets')
+  var sh = getSpreadsheet().getSheetByName('pets')
   if (!sh || sh.getLastRow() <= 1) return map
   var headers = readHeaders(sh)
   var idIdx = headers.indexOf('id'), nameIdx = headers.indexOf('name')
