@@ -52,6 +52,7 @@ var LINE_ADMIN_USER_IDS = 'LINE_ADMIN_USER_IDS'
 var LINE_CHANNEL_IDS = 'LINE_CHANNEL_IDS'
 var LINE_CHANNEL_SECRET = 'LINE_CHANNEL_SECRET'
 var LINE_GROUPS_PROPERTY = 'PETCARE_LINE_GROUPS'
+var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 
 var DEFAULT_LOG_TYPES = [
   ['med',     'ให้ยา',       'Medicine', '💊', 'FALSE', 'TRUE', '1'],
@@ -253,6 +254,9 @@ function doPost(e) {
   try {
     var body = (e && e.postData && e.postData.contents) || '{}'
     p = JSON.parse(body)
+    if (p.action === 'lineWebhookRelay') {
+      return handleLineWebhookRelay(p.payload, p.relay_secret)
+    }
     if (p && Array.isArray(p.events)) {
       return handleLineWebhook(body, p, e)
     }
@@ -273,11 +277,22 @@ function doPost(e) {
   }
 }
 
+function handleLineWebhookRelay(payload, relaySecret) {
+  var expected = String(PropertiesService.getScriptProperties().getProperty(GAS_WEBHOOK_SECRET) || '')
+  if (!expected || !constantTimeEqual(expected, String(relaySecret || ''))) throw new Error('Invalid GAS webhook relay secret')
+  if (!payload || !Array.isArray(payload.events)) throw new Error('Invalid relayed LINE webhook payload')
+  return processLineWebhook(payload)
+}
+
 // LINE Webhook endpoint. LINE signs the raw request body, so verification must
 // happen before parsing or trusting any event data.
 function handleLineWebhook(body, payload, e) {
   var signature = getHeader(e, 'X-Line-Signature')
   if (!verifyLineWebhookSignature(body, signature)) throw new Error('Invalid LINE webhook signature')
+  return processLineWebhook(payload)
+}
+
+function processLineWebhook(payload) {
   var groups = []
   ;(payload.events || []).forEach(function (event) {
     var source = event && event.source

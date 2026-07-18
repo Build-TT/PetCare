@@ -157,6 +157,18 @@ describe('GAS security behavior', () => {
     expect(JSON.parse(result.value).message).toContain('Invalid LINE webhook signature')
   })
 
+  it('accepts only relayed group webhooks with the shared GAS relay secret', () => {
+    const properties = { GAS_WEBHOOK_SECRET: 'relay-secret' }
+    const { sandbox, propertyWrites } = makeGasSandbox({ properties, fetchImpl: () => response(200, {}) })
+    const payload = { events: [{ type: 'join', source: { type: 'group', groupId: 'C12345678901234567890123456789ab' } }] }
+    const accepted = sandbox.doPost({ postData: { contents: JSON.stringify({ action: 'lineWebhookRelay', relay_secret: 'relay-secret', payload }) } })
+    expect(JSON.parse(accepted.value)).toMatchObject({ status: 'ok', group_count: 1 })
+    expect(propertyWrites.some(item => item.key === 'PETCARE_LINE_GROUPS')).toBe(true)
+
+    const rejected = sandbox.doPost({ postData: { contents: JSON.stringify({ action: 'lineWebhookRelay', relay_secret: 'wrong', payload }) } })
+    expect(JSON.parse(rejected.value).message).toContain('Invalid GAS webhook relay secret')
+  })
+
   it('requires ownership by the verified Google identity when linking a Sheet', () => {
     const { sandbox } = makeGasSandbox({ fetchImpl: url => url.includes('/drive/v3/files/')
       ? response(200, { id: 'sheet-1', name: 'Sheet', mimeType: 'application/vnd.google-apps.spreadsheet', owners: [{ emailAddress: 'other@example.com' }] })
