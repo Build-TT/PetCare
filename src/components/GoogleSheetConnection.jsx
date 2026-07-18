@@ -5,11 +5,11 @@ import '../googleSheetConnection.css'
 
 const CONNECTION_META_KEY = 'petcare.google-sheet.v1'
 
-export default function GoogleSheetConnection({ onConnected, onProvisionLine, lineUserId = '', connection: connectedConnection = null, syncStatus = 'idle', syncError = '', externalError = '' }) {
+export default function GoogleSheetConnection({ onConnected, onProvisionLine, lineUserId = '', connection: connectedConnection = null, syncStatus = 'idle', syncError = '', externalError = '', ariaLabel = 'Google Sheet connection', initialConsentAccepted = false, showConsent = true, buttonLabel = 'เชื่อมต่อ Google' }) {
   const [connection, setConnection] = useState(connectedConnection)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [consentAccepted, setConsentAccepted] = useState(false)
+  const [consentAccepted, setConsentAccepted] = useState(initialConsentAccepted)
 
   useEffect(() => {
     if (connectedConnection) setConnection(connectedConnection)
@@ -45,7 +45,7 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, li
   }
 
   if (!isGoogleConfigured()) {
-    return <section className="setting setting-google" aria-label="Google Sheet connection">
+    return <section className="setting setting-google" aria-label={ariaLabel}>
       <b>Google Sheet</b>
       <small>ยังไม่ได้ตั้งค่า Google OAuth · Demo mode</small>
       <button type="button" className="text-button" disabled>เชื่อมต่อ Google</button>
@@ -54,7 +54,7 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, li
   }
 
   if (connection) {
-    return <section className="setting setting-google" aria-label="Google Sheet connection">
+    return <section className="setting setting-google" aria-label={ariaLabel}>
       <b>Google Sheet เชื่อมต่อแล้ว</b>
       <small>{connection.email} · {connection.created ? 'สร้าง Sheet ใหม่แล้ว' : 'ใช้ Sheet เดิม'}</small>
       {syncStatus === 'pending' && <small>มีข้อมูลใหม่รอการบันทึกลง Google Sheet…</small>}
@@ -65,14 +65,14 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, li
     </section>
   }
 
-  return <section className="setting setting-google" aria-label="Google Sheet connection">
+  return <section className="setting setting-google" aria-label={ariaLabel}>
     <b>Google Sheet</b>
     <small>{busy ? 'กำลังสร้างและเตรียม Sheet…' : 'สร้าง Sheet ส่วนตัวอัตโนมัติ'}</small>
-    <label className="google-consent">
+    {showConsent && <label className="google-consent">
       <input type="checkbox" checked={consentAccepted} onChange={event => setConsentAccepted(event.target.checked)} />
       <span>อนุญาตให้ PetCare สร้างและบันทึกข้อมูลในไฟล์ Google Sheet ของฉัน</span>
-    </label>
-    <button type="button" className="text-button" onClick={connect} disabled={busy || !consentAccepted}>{busy ? 'กำลังเชื่อมต่อ…' : 'เชื่อมต่อ Google'}</button>
+    </label>}
+    <button type="button" className="text-button" onClick={connect} disabled={busy || !consentAccepted}>{busy ? 'กำลังเชื่อมต่อ…' : buttonLabel}</button>
     {(error || externalError) && <small role="alert" className="danger">{error || externalError}</small>}
   </section>
 }

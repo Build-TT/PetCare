@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { summarizeSymptoms } from './domain/summary.js'
 import { loadStoredState, saveStoredState } from './domain/storage.js'
 import SettingsSurface from './components/SettingsSurface.jsx'
+import GoogleDriveOnboarding from './components/GoogleDriveOnboarding.jsx'
 import { hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, unwrapPendingState } from './remoteState.js'
 import { provisionGoogleLineLink } from './gasProvisioning.js'
 import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
@@ -26,6 +27,8 @@ const TREATMENT_CATEGORIES = ['การกินยา', 'การป่วย
 const REMINDER_FREQUENCIES = ['ครั้งเดียว', 'ทุกวัน', 'ทุกสัปดาห์', 'ทุกเดือน', 'ทุก 3 เดือน', 'ทุกปี']
 const LOCAL_STATE_KEY = 'petcare.local.v1'
 const REMOTE_OUTBOX_KEY = 'petcare.remote-outbox.v1'
+const GOOGLE_SHEET_META_KEY = 'petcare.google-sheet.v1'
+const GOOGLE_ONBOARDING_KEY = 'petcare.google-drive-onboarding.v1'
 const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
 const navItems = [
   ['home', '⌂', 'หน้าหลัก'], ['track', '🐾', 'สมุดบันทึก'], ['diary', '✎', 'ประวัติการรักษา'],
@@ -226,6 +229,8 @@ function migrateLegacyOwners(state) {
 
 function App({ initialPage = 'home' }) {
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
+  const rememberedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
+  const hasCompletedGoogleOnboarding = window.localStorage.getItem(GOOGLE_ONBOARDING_KEY) === 'connected' || Boolean(rememberedGoogleSheet?.spreadsheetId)
   const [page, setPage] = useState(MAIN_APP_PAGES.has(initialPage) ? initialPage : 'home')
   const [pets, setPets] = useState(initial.pets ?? defaultPets)
   const [activePetId, setActivePetId] = useState(initial.activePetId ?? (initial.pets ?? defaultPets)[0]?.id)
@@ -255,6 +260,7 @@ function App({ initialPage = 'home' }) {
   const [note, setNote] = useState('')
   const [datetime, setDatetime] = useState(nowLocal())
   const [googleConnection, setGoogleConnection] = useState(null)
+  const [showGoogleOnboarding, setShowGoogleOnboarding] = useState(!hasCompletedGoogleOnboarding)
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState('idle')
   const [syncError, setSyncError] = useState('')
@@ -412,6 +418,8 @@ function App({ initialPage = 'home' }) {
       setActivePetId(hydrated.activePetId || activePetId)
       setGoogleConnection(connection)
       setRemoteReady(true)
+      window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
+      setShowGoogleOnboarding(false)
       for (const recipient of hydrated.lineRecipients ?? []) {
         await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipient.recipient_id })
       }
@@ -771,6 +779,7 @@ function App({ initialPage = 'home' }) {
   />
 
   return <main className="app-shell">
+    {showGoogleOnboarding && <GoogleDriveOnboarding onConnected={handleGoogleConnected} />}
     {profileFormOpen && <div className="profile-upload-wrap"><label className="profile-upload">รูปโปรไฟล์<input type="file" accept="image/*" onChange={handleProfilePhoto} /></label>{profilePhoto && <img className="profile-upload-preview" src={profilePhoto} alt="ตัวอย่างรูปโปรไฟล์" />}</div>}
     <header><div><small>PETCARE / {page.toUpperCase()}</small><h1>{page === 'home' ? `${activePetLabel} วันนี้เป็นไง?` : page === 'track' ? 'สมุดบันทึก' : page === 'diary' ? 'ประวัติการรักษา' : page === 'reminders' ? 'แจ้งเตือน' : 'ตั้งค่า'}</h1></div><button className="profile" aria-label="จัดการโปรไฟล์สัตว์เลี้ยง" onClick={() => setProfileOpen(!profileOpen)}>{activePet.photo ? <img className="profile-photo" src={activePet.photo} alt="" /> : <span className="profile-species-icon" aria-hidden="true">{petIcon(activePet)}</span>}<span>{activePetLabel}</span></button></header>
     {profileOpen && <section className="profile-panel" aria-label="โปรไฟล์สัตว์เลี้ยง"><div className="section-title"><h2>โปรไฟล์สัตว์เลี้ยง</h2><button className="text-button" onClick={() => openProfileForm()}>＋ เพิ่มโปรไฟล์</button></div>{profileFormOpen && <section className="form-card profile-form" aria-label="ฟอร์มโปรไฟล์สัตว์เลี้ยง"><label>ชื่อสัตว์เลี้ยง<input value={profileName} onChange={e => setProfileName(e.target.value)} /></label><label>ประเภทสัตว์<select value={profileSpecies} onChange={e => setProfileSpecies(e.target.value)}><option value="dog">สุนัข</option><option value="cat">แมว</option><option value="other">อื่นๆ</option></select></label><label>เพศ<select value={profileGender} onChange={e => setProfileGender(e.target.value)}><option value="">ไม่ระบุ</option><option value="male">ผู้</option><option value="female">เมีย</option></select></label><label>วันเกิด<input type="date" value={profileBirthdate} onChange={e => setProfileBirthdate(e.target.value)} /></label><label>สายพันธุ์<input value={profileBreed} onChange={e => setProfileBreed(e.target.value)} /></label><div className="form-actions"><button className="primary" disabled={!profileName.trim()} onClick={savePetProfile}>{editingPetId ? 'บันทึกการแก้ไข' : 'เพิ่มโปรไฟล์'}</button><button className="text-button" onClick={resetProfileForm}>ยกเลิก</button></div></section>}{availablePets.map(pet => <article className="profile-row" key={pet.id}><span className="profile-species-icon" aria-hidden="true">{petIcon(pet)}</span><button className="profile-select" onClick={() => { setActivePetId(pet.id); setProfileOpen(false) }}><b>{pet.name}{pet.id === activePet.id ? ' · กำลังใช้งาน' : ''}</b><small>{pet.breed || 'ยังไม่มีรายละเอียดเพิ่มเติม'}</small></button><button className="text-button" onClick={() => openProfileForm(pet)}>แก้ไข</button></article>)}</section>}

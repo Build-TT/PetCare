@@ -1,5 +1,90 @@
 .quick { display: none; }
 
+.google-onboarding-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(48, 39, 35, .58);
+}
+
+.google-onboarding-dialog {
+  width: min(100%, 390px);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 24px 20px 20px;
+  border: 1px solid #dec6b0;
+  border-radius: 18px;
+  background: #fffdfb;
+  color: #624a3e;
+}
+
+.google-onboarding-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #dec6b0;
+  border-radius: 12px;
+  background: #f7eee6;
+  color: #624a3e;
+  font: 700 22px system-ui, sans-serif;
+}
+
+.google-onboarding-kicker {
+  margin: 18px 0 4px;
+  color: #9b7c67;
+  font-size: 11px;
+}
+
+.google-onboarding-dialog h2 {
+  margin: 0;
+  color: #4d382f;
+  font-size: 22px;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.google-onboarding-dialog > p:not(.google-onboarding-kicker) {
+  margin: 10px 0 0;
+  color: #7a5947;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.google-onboarding-benefits {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 4px;
+  padding: 0 0 0 18px;
+  color: #624a3e;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.google-onboarding-dialog .setting-google {
+  margin: 16px 0 0;
+  padding: 14px 0 0;
+  border: 0;
+  border-top: 1px solid #ead8c8;
+  border-radius: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .google-onboarding-dialog { animation: onboarding-in 180ms ease-out; }
+}
+
+@keyframes onboarding-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .google-onboarding-dialog { animation: none; }
+}
+
 .page-content > .setting:not(.setting-google) { display: none; }
 
 .profile-panel,
