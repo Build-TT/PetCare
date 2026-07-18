@@ -55,7 +55,11 @@ PetCare asks for consent before starting the Google authorization flow. It creat
 
 ## LINE reminders
 
-LINE reminders require one LINE Messaging API channel configured by the system owner. Set `LINE_TOKEN`, `LINE_CHANNEL_IDS`, and `LINE_ADMIN_USER_IDS` once in the deployed Apps Script project; customers must never edit or receive these values. The web app asks each customer for Google consent and a valid LINE User ID, then calls the Google-authenticated `provisionUser` action. GAS verifies that the Google account owns the Sheet, grants the deployed script writer access, creates any missing schema tabs, and stores the LINE-user-to-Sheet mapping. Customers do not open Apps Script or paste a Sheet URL.
+LINE reminders require one LINE Messaging API channel configured by the system owner. Set `LINE_TOKEN`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_IDS`, and `LINE_ADMIN_USER_IDS` once in the deployed Apps Script project; customers must never edit or receive these values. The web app asks each customer for Google consent and a valid LINE User ID, then calls the Google-authenticated `provisionUser` action. GAS verifies that the Google account owns the Sheet, grants the deployed script writer access, creates any missing schema tabs, and stores the LINE-user-to-Sheet mapping. Customers do not open Apps Script or paste a Sheet URL.
+
+### LINE group webhook
+
+In LINE Developers Console → Messaging API, enable **Allow bot to join group chats**, set the deployed GAS Web App `/exec` URL as the Webhook URL, and enable **Use webhook**. `gas/Code.gs` verifies the `X-Line-Signature` header with `LINE_CHANNEL_SECRET` before accepting events. When the Official Account joins a group or receives a group message, the group ID is stored in Script Properties under `PETCARE_LINE_GROUPS`. The current web UI still needs a group-picker before customers can select a stored group as a reminder recipient. After deployment, use LINE's Verify button; if the GAS runtime does not expose the incoming header as `e.headers`, place the webhook on a serverless relay that verifies the signature and forwards the verified event to GAS.
 
 The web app writes reminders to the normalized `reminders` tab. After updating `gas/Code.gs`, deploy a new Web App version, keep **Execute as me** and **Who has access: Anyone**, then run `installReminderTrigger()` once. The trigger checks both legacy `med_schedules` and normalized `reminders`; normalized reminders created from the UI are sent at 08:00 in the Apps Script project timezone because the current UI stores a date but not a time.
 

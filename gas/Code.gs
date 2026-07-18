@@ -13,6 +13,7 @@
  *      → คัดลอก URL ไปใส่ VITE_GAS_URL
  *   4. ตั้งค่า Script Properties (Project Settings → Script Properties):
  *        LINE_TOKEN = channel access token ของ Messaging API
+ *        LINE_CHANNEL_SECRET = channel secret ของ Messaging API สำหรับตรวจ Webhook signature
  *        reminder_recipients sheet = recipient IDs scoped to each reminder and user Sheet
  *        LINE_CHANNEL_IDS = allowlisted LINE Channel IDs returned by token verification
  *        LINE_ADMIN_USER_IDS = verified LINE user IDs allowed to run testPush
@@ -49,6 +50,8 @@ var USER_SHEET_PREFIX = 'PETCARE_USER_SHEET_'
 var USER_LINK_PREFIX = 'PETCARE_USER_LINK_'
 var LINE_ADMIN_USER_IDS = 'LINE_ADMIN_USER_IDS'
 var LINE_CHANNEL_IDS = 'LINE_CHANNEL_IDS'
+var LINE_CHANNEL_SECRET = 'LINE_CHANNEL_SECRET'
+var LINE_GROUPS_PROPERTY = 'PETCARE_LINE_GROUPS'
 
 var DEFAULT_LOG_TYPES = [
   ['med',     'ให้ยา',       'Medicine', '💊', 'FALSE', 'TRUE', '1'],
@@ -248,7 +251,11 @@ function doGet() {
 function doPost(e) {
   var p = {}
   try {
-    p = JSON.parse((e && e.postData && e.postData.contents) || '{}')
+    var body = (e && e.postData && e.postData.contents) || '{}'
+    p = JSON.parse(body)
+    if (p && Array.isArray(p.events)) {
+      return handleLineWebhook(body, p, e)
+    }
     if (p.action === 'provisionUser') {
       var google = verifyGoogleIdentity(p.google_access_token)
       var provisioned = provisionUser(p, google)
@@ -264,6 +271,63 @@ function doPost(e) {
   } finally {
     CURRENT_LINE_USER_ID = ''
   }
+}
+
+// LINE Webhook endpoint. LINE signs the raw request body, so verification must
+// happen before parsing or trusting any event data.
+function handleLineWebhook(body, payload, e) {
+  var signature = getHeader(e, 'X-Line-Signature')
+  if (!verifyLineWebhookSignature(body, signature)) throw new Error('Invalid LINE webhook signature')
+  var groups = []
+  ;(payload.events || []).forEach(function (event) {
+    var source = event && event.source
+    if (!source || source.type !== 'group' || !source.groupId) return
+    var group = rememberLineGroup(source.groupId, event.type)
+    if (group) groups.push(group)
+  })
+  return json({ status: 'ok', event_count: (payload.events || []).length, group_count: groups.length })
+}
+
+function getHeader(e, name) {
+  var headers = (e && e.headers) || {}
+  var wanted = String(name).toLowerCase()
+  return Object.keys(headers).reduce(function (value, key) {
+    return String(key).toLowerCase() === wanted ? headers[key] : value
+  }, '')
+}
+
+function verifyLineWebhookSignature(body, signature) {
+  var secret = String(PropertiesService.getScriptProperties().getProperty(LINE_CHANNEL_SECRET) || '')
+  if (!secret || !signature) return false
+  var digest = Utilities.computeHmacSha256Signature(String(body || ''), secret)
+  var expected = Utilities.base64Encode(digest)
+  return constantTimeEqual(String(expected), String(signature))
+}
+
+function constantTimeEqual(left, right) {
+  if (left.length !== right.length) return false
+  var mismatch = 0
+  for (var i = 0; i < left.length; i++) mismatch |= left.charCodeAt(i) ^ right.charCodeAt(i)
+  return mismatch === 0
+}
+
+function rememberLineGroup(groupId, eventType) {
+  var normalizedId = String(groupId || '').trim()
+  if (!/^C[A-Za-z0-9_-]{20,}$/.test(normalizedId)) return null
+  var props = PropertiesService.getScriptProperties()
+  var groups = {}
+  try { groups = JSON.parse(props.getProperty(LINE_GROUPS_PROPERTY) || '{}') || {} } catch (err) { groups = {} }
+  var now = nowIso()
+  var existing = groups[normalizedId] || { group_id: normalizedId, created_at: now }
+  groups[normalizedId] = {
+    group_id: normalizedId,
+    status: 'active',
+    last_event: String(eventType || ''),
+    created_at: existing.created_at || now,
+    updated_at: now,
+  }
+  props.setProperty(LINE_GROUPS_PROPERTY, JSON.stringify(groups))
+  return groups[normalizedId]
 }
 
 function extractBearer(e) {

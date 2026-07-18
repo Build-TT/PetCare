@@ -18,6 +18,10 @@ function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = '
     }) },
     UrlFetchApp: { fetch: (url, options) => { calls.push({ url, options }); return fetchImpl(url, options) } },
     ContentService: { MimeType: { JSON: 'JSON' }, createTextOutput: value => ({ value, setMimeType: () => ({ value }) }) },
+    Utilities: {
+      computeHmacSha256Signature: (body, secret) => [String(body).length, String(secret).length, 7],
+      base64Encode: bytes => bytes.join('-'),
+    },
     SpreadsheetApp: { openById: id => openById ? openById(id) : ({ getSheetByName: () => null }) },
     ScriptApp: {},
   }
@@ -123,6 +127,34 @@ describe('GAS security behavior', () => {
     expect(JSON.parse(result.value).message).toContain('not authorized')
     expect(calls[0].url).toContain('/oauth2/v2.1/verify')
     expect(calls).toHaveLength(1)
+  })
+
+  it('accepts a signed LINE group webhook and remembers the group ID', () => {
+    const properties = { LINE_CHANNEL_SECRET: 'channel-secret' }
+    const { sandbox, propertyWrites } = makeGasSandbox({ properties, fetchImpl: () => response(200, {}) })
+    const body = JSON.stringify({
+      destination: 'channel-id',
+      events: [{ type: 'message', source: { type: 'group', groupId: 'C12345678901234567890123456789ab' } }],
+    })
+    const result = sandbox.doPost({
+      headers: { 'X-Line-Signature': `${body.length}-14-7` },
+      postData: { contents: body },
+    })
+
+    expect(JSON.parse(result.value)).toEqual({ status: 'ok', event_count: 1, group_count: 1 })
+    const stored = propertyWrites.find(item => item.key === 'PETCARE_LINE_GROUPS')
+    expect(JSON.parse(stored.value)['C12345678901234567890123456789ab']).toMatchObject({
+      group_id: 'C12345678901234567890123456789ab',
+      status: 'active',
+      last_event: 'message',
+    })
+  })
+
+  it('rejects an unsigned or tampered LINE group webhook', () => {
+    const { sandbox } = makeGasSandbox({ properties: { LINE_CHANNEL_SECRET: 'channel-secret' }, fetchImpl: () => response(200, {}) })
+    const body = JSON.stringify({ events: [{ type: 'join', source: { type: 'group', groupId: 'C12345678901234567890123456789ab' } }] })
+    const result = sandbox.doPost({ headers: { 'X-Line-Signature': 'wrong' }, postData: { contents: body } })
+    expect(JSON.parse(result.value).message).toContain('Invalid LINE webhook signature')
   })
 
   it('requires ownership by the verified Google identity when linking a Sheet', () => {
