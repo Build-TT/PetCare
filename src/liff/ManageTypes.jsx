@@ -4,6 +4,7 @@ import { bustCache } from '../cache.js'
 import { t, useLang } from '../i18n.js'
 import { S, tap } from '../ui.js'
 import LangToggle from '../components/LangToggle.jsx'
+import GoogleSheetLink from './GoogleSheetLink.jsx'
 
 // หน้าเพิ่มประเภทบันทึกเอง เช่น "อาเจียน 🤮", "น้ำหนัก ⚖️"
 const EMPTY = { key: '', label_th: '', label_en: '', icon: '', needs_detail: 'FALSE' }
@@ -15,17 +16,24 @@ export default function ManageTypes() {
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
 
-  useEffect(() => { initLiff('types'); load() }, [])
+  useEffect(() => {
+    ;(async () => {
+      try { await initLiff('types'); await load() } catch (e) { setLoadError(e.message || t('error', lang)); setLoading(false) }
+    })()
+  }, [])
 
   async function load() {
     setLoading(true)
+    setLoadError('')
     try {
-      const rows = await fetchSheet('log_types').catch(() => [])
+      const rows = await fetchSheet('log_types')
       setTypes(rows
         .filter(r => String(r.active).toUpperCase() !== 'FALSE')
         .sort((a, b) => (+a.order || 0) - (+b.order || 0)))
-    } catch (e) { setToast(t('error', lang)) }
+    } catch (e) { setLoadError(e.message || t('error', lang)) }
     setLoading(false)
   }
 
@@ -33,6 +41,7 @@ export default function ManageTypes() {
     const label = form.label_th.trim() || form.label_en.trim()
     if (!label || busy) return
     setBusy(true)
+    setActionError('')
     try {
       // สร้าง key อัตโนมัติจาก timestamp ถ้าเป็นรายการใหม่
       const key = form.key || 'custom_' + Date.now().toString(36)
@@ -49,7 +58,7 @@ export default function ManageTypes() {
       setToast(t('saved', lang))
       setForm(null)
       await load()
-    } catch (e) { setToast(t('error', lang)) }
+    } catch (e) { setActionError(e.message || t('error', lang)) }
     setBusy(false)
   }
 
@@ -71,8 +80,15 @@ export default function ManageTypes() {
         <LangToggle />
       </div>
 
+      <GoogleSheetLink pageKey="types" onLinked={load} />
+
       {loading ? (
         <p style={S.muted}>{t('loading', lang)}</p>
+      ) : loadError ? (
+        <div role="alert" style={S.danger}>
+          <p>{loadError}</p>
+          <button style={S.ghost} {...tap(load)}>Retry</button>
+        </div>
       ) : (
         <>
           {types.map(tp => (
@@ -89,6 +105,7 @@ export default function ManageTypes() {
             </div>
           ))}
 
+          {actionError && <div role="alert" style={S.danger}><p>{actionError}</p><button style={S.ghost} {...tap(save)}>Retry</button></div>}
           {form ? (
             <div style={{ ...S.card, border: '2px solid #bbf7d0' }}>
               <label style={S.label}>Icon (emoji)</label>

@@ -4,6 +4,7 @@ import { bustCache } from '../cache.js'
 import { t, useLang } from '../i18n.js'
 import { S, tap, PET_COLORS } from '../ui.js'
 import LangToggle from '../components/LangToggle.jsx'
+import GoogleSheetLink from './GoogleSheetLink.jsx'
 
 // ใช้เมื่อชีต log_types ยังว่าง (ยังไม่ seed)
 const FALLBACK_TYPES = [
@@ -26,8 +27,14 @@ export default function AddLog() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
 
-  useEffect(() => { initLiff('log'); load() }, [])
+  useEffect(() => {
+    ;(async () => {
+      try { await initLiff('log'); await load() } catch (e) { setLoadError(e.message || t('error', lang)); setLoading(false) }
+    })()
+  }, [])
 
   // อ่าน ?pet= และ ?type= จาก url (มาจากปุ่ม quick-log บน dashboard)
   function presetFromUrl(petsList, typeList) {
@@ -42,10 +49,11 @@ export default function AddLog() {
 
   async function load() {
     setLoading(true)
+    setLoadError('')
     try {
       const [petRows, typeRows] = await Promise.all([
         fetchSheet('pets'),
-        fetchSheet('log_types').catch(() => []),
+        fetchSheet('log_types'),
       ])
       const activePets = petRows.filter(p => String(p.active).toUpperCase() !== 'FALSE')
       let activeTypes = typeRows
@@ -57,7 +65,7 @@ export default function AddLog() {
       if (activePets.length === 1) setPetId(activePets[0].id)
       presetFromUrl(activePets, activeTypes)
     } catch (e) {
-      setToast(t('error', lang))
+      setLoadError(e.message || t('error', lang))
     }
     setLoading(false)
   }
@@ -71,6 +79,7 @@ export default function AddLog() {
   async function save() {
     if (!petId || !type || busy) return
     setBusy(true)
+    setActionError('')
     try {
       await sendToGAS({
         action: 'addLog',
@@ -85,7 +94,7 @@ export default function AddLog() {
       setDetail('')
       setDatetime(nowLocalISO())
     } catch (e) {
-      setToast(t('error', lang))
+      setActionError(e.message || t('error', lang))
     }
     setBusy(false)
   }
@@ -97,8 +106,15 @@ export default function AddLog() {
         <LangToggle />
       </div>
 
+      <GoogleSheetLink pageKey="log" onLinked={load} />
+
       {loading ? (
         <p style={S.muted}>{t('loading', lang)}</p>
+      ) : loadError ? (
+        <div role="alert" style={S.danger}>
+          <p>{loadError}</p>
+          <button style={S.ghost} {...tap(load)}>Retry</button>
+        </div>
       ) : pets.length === 0 ? (
         <div style={S.card}>
           <p style={S.muted}>{t('no_pets', lang)}</p>
@@ -146,6 +162,7 @@ export default function AddLog() {
           <textarea style={S.textarea} value={detail} placeholder={t('detail_ph', lang)}
             onChange={e => setDetail(e.target.value)} />
 
+          {actionError && <div role="alert" style={S.danger}><p>{actionError}</p><button style={S.ghost} {...tap(save)}>Retry</button></div>}
           <button style={{ ...S.primary, opacity: (!petId || !type) ? 0.5 : 1 }}
             disabled={busy || !petId || !type} {...tap(save)}>
             {busy ? t('saving', lang) : t('save', lang)}

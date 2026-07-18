@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react'
-import { fetchSheet, sendToGAS, fmtDateTime } from '../liff/utils.js'
+import { fetchSheet, sendToGAS, fmtDateTime, initLiff } from '../liff/utils.js'
 import { bustCache } from '../cache.js'
 import { t, useLang } from '../i18n.js'
 import { S, tap } from '../ui.js'
 import LangToggle from '../components/LangToggle.jsx'
+import GoogleSheetLink from '../liff/GoogleSheetLink.jsx'
 
 // timeline ประวัติรายตัว + กรองตามประเภท
 export default function PetDetail({ petId }) {
@@ -13,22 +14,28 @@ export default function PetDetail({ petId }) {
   const [types, setTypes] = useState([])
   const [filter, setFilter] = useState('')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    ;(async () => {
+      try { await initLiff('pet'); await load() } catch (e) { setError(e.message || t('error', lang)); setLoading(false) }
+    })()
+  }, [])
 
   async function load() {
     setLoading(true)
+    setError('')
     try {
       const [petRows, logRows, typeRows] = await Promise.all([
         fetchSheet('pets'),
-        fetchSheet('logs').catch(() => []),
-        fetchSheet('log_types').catch(() => []),
+        fetchSheet('logs'),
+        fetchSheet('log_types'),
       ])
       setPet(petRows.find(p => p.id === petId) || null)
       setLogs(logRows.filter(l => l.pet_id === petId)
         .sort((a, b) => String(b.datetime).localeCompare(String(a.datetime))))
       setTypes(typeRows.sort((a, b) => (+a.order || 0) - (+b.order || 0)))
-    } catch (e) { /* เงียบไว้ */ }
+    } catch (e) { setError(e.message || t('error', lang)) }
     setLoading(false)
   }
 
@@ -49,7 +56,7 @@ export default function PetDetail({ petId }) {
       await sendToGAS({ action: 'deleteLog', id: l.id })
       bustCache('dash')
       await load()
-    } catch (e) { /* */ }
+    } catch (e) { setError(e.message || t('error', lang)) }
   }
 
   const shown = filter ? logs.filter(l => l.type === filter) : logs
@@ -63,8 +70,15 @@ export default function PetDetail({ petId }) {
         <LangToggle />
       </div>
 
+      <GoogleSheetLink pageKey="pet" onLinked={load} />
+
       {loading ? (
         <p style={S.muted}>{t('loading', lang)}</p>
+      ) : error ? (
+        <div role="alert" style={S.danger}>
+          <p>{error}</p>
+          <button style={S.ghost} {...tap(load)}>Retry</button>
+        </div>
       ) : !pet ? (
         <p style={S.muted}>{t('none', lang)}</p>
       ) : (
