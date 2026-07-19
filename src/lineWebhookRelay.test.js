@@ -55,7 +55,7 @@ describe('Vercel LINE webhook relay', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('preserves POST across the GAS redirect for a signed group event', async () => {
+  it('follows the GAS ContentService redirect with GET for a signed group event', async () => {
     const channelSecret = '0123456789abcdef0123456789abcdef'
     const body = JSON.stringify({
       destination: 'U123',
@@ -84,7 +84,8 @@ describe('Vercel LINE webhook relay', () => {
     expect(response.body).toEqual({ status: 'ok' })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[1][0]).toBe('https://script.googleusercontent.com/macros/echo')
-    expect(fetchMock.mock.calls[1][1].method).toBe('POST')
+    expect(fetchMock.mock.calls[1][1].method).toBe('GET')
+    expect(fetchMock.mock.calls[1][1].body).toBeUndefined()
   })
 
   it('rejects a request with an invalid LINE signature before calling GAS', async () => {
