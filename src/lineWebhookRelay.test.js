@@ -36,9 +36,31 @@ describe('Vercel LINE webhook relay', () => {
     vi.unstubAllGlobals()
   })
 
-  it('accepts LINE verification requests and preserves POST across the GAS redirect', async () => {
+  it('acknowledges a signed LINE verification request without calling GAS', async () => {
     const channelSecret = '0123456789abcdef0123456789abcdef'
     const body = JSON.stringify({ destination: 'U123', events: [] })
+    const signature = crypto.createHmac('sha256', channelSecret).update(body, 'utf8').digest('base64')
+    vi.stubEnv('LINE_CHANNEL_SECRET', channelSecret)
+    vi.stubEnv('VITE_GAS_URL', 'https://script.google.com/macros/s/test/exec')
+    vi.stubEnv('GAS_WEBHOOK_SECRET', 'relay-secret')
+
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = responseRecorder()
+    await lineWebhook(requestFor(body, signature), response)
+
+    expect(response.statusCode).toBe(200)
+    expect(response.body).toEqual({ status: 'ok' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('preserves POST across the GAS redirect for a signed group event', async () => {
+    const channelSecret = '0123456789abcdef0123456789abcdef'
+    const body = JSON.stringify({
+      destination: 'U123',
+      events: [{ type: 'join', source: { type: 'group', groupId: 'C12345678901234567890123456789ab' } }],
+    })
     const signature = crypto.createHmac('sha256', channelSecret).update(body, 'utf8').digest('base64')
     vi.stubEnv('LINE_CHANNEL_SECRET', channelSecret)
     vi.stubEnv('VITE_GAS_URL', 'https://script.google.com/macros/s/test/exec')
