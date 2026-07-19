@@ -37,6 +37,8 @@ var SHEETS = {
 }
 
 var PETCARE_SPREADSHEET_ID = 'PETCARE_SPREADSHEET_ID'
+var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
+var LINE_GROUPS_PROPERTY = 'PETCARE_LINE_GROUPS'
 
 var DEFAULT_LOG_TYPES = [
   ['med',     'ให้ยา',       'Medicine', '💊', 'FALSE', 'TRUE', '1'],
@@ -140,6 +142,75 @@ function doGet(e) {
   } catch (err) {
     return json({ status: 'error', message: String(err) })
   }
+}
+
+// Vercel verifies LINE's X-Line-Signature against the raw request body, then
+// relays the parsed payload here with a separate shared secret. This avoids the
+// redirect returned by Apps Script ContentService being exposed to LINE.
+function doPost(e) {
+  try {
+    var body = (e && e.postData && e.postData.contents) || '{}'
+    var p = JSON.parse(body)
+    if (p.action !== 'lineWebhookRelay') {
+      return json({ status: 'error', message: 'unknown POST action' })
+    }
+    return handleLineWebhookRelay(p.payload, p.relay_secret)
+  } catch (err) {
+    return json({ status: 'error', message: String(err.message || err) })
+  }
+}
+
+function handleLineWebhookRelay(payload, relaySecret) {
+  var expected = String(PropertiesService.getScriptProperties().getProperty(GAS_WEBHOOK_SECRET) || '')
+  if (!expected || !constantTimeEqual(expected, String(relaySecret || ''))) {
+    throw new Error('Invalid GAS webhook relay secret')
+  }
+  if (!payload || !Array.isArray(payload.events)) {
+    throw new Error('Invalid relayed LINE webhook payload')
+  }
+
+  var groups = []
+  payload.events.forEach(function (event) {
+    var source = event && event.source
+    if (!source || source.type !== 'group' || !source.groupId) return
+    var group = rememberLineGroup(source.groupId, event.type)
+    if (group) groups.push(group)
+  })
+  return json({ status: 'ok', event_count: payload.events.length, group_count: groups.length })
+}
+
+function constantTimeEqual(left, right) {
+  if (left.length !== right.length) return false
+  var mismatch = 0
+  for (var i = 0; i < left.length; i++) {
+    mismatch |= left.charCodeAt(i) ^ right.charCodeAt(i)
+  }
+  return mismatch === 0
+}
+
+function rememberLineGroup(groupId, eventType) {
+  var normalizedId = String(groupId || '').trim()
+  if (!/^C[A-Za-z0-9_-]{20,}$/.test(normalizedId)) return null
+
+  var props = PropertiesService.getScriptProperties()
+  var groups = {}
+  try {
+    groups = JSON.parse(props.getProperty(LINE_GROUPS_PROPERTY) || '{}') || {}
+  } catch (err) {
+    groups = {}
+  }
+
+  var now = nowIso()
+  var existing = groups[normalizedId] || { group_id: normalizedId, created_at: now }
+  groups[normalizedId] = {
+    group_id: normalizedId,
+    status: 'active',
+    last_event: String(eventType || ''),
+    created_at: existing.created_at || now,
+    updated_at: now,
+  }
+  props.setProperty(LINE_GROUPS_PROPERTY, JSON.stringify(groups))
+  return groups[normalizedId]
 }
 
 // ── generic row helpers ────────────────────────────────────────────────────
