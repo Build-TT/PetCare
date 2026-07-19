@@ -36,6 +36,8 @@ For development, use a separate Google OAuth client and a test Google account. T
 
 LINE reminders still require a LINE Messaging API channel, channel access token, webhook recipient IDs, and the Apps Script trigger configuration described in `gas/Code.gs`. These credentials must be configured separately and must never be committed.
 
+For group webhooks, configure LINE Developers to call the production Vercel endpoint at `/api/line/webhook`. Vercel verifies `X-Line-Signature` with `LINE_CHANNEL_SECRET`, then relays verified events to the deployed Apps Script `/exec` URL using `GAS_WEBHOOK_SECRET`. Store the same `GAS_WEBHOOK_SECRET` value in Vercel Production Environment Variables and Apps Script Properties. Captured group IDs are stored in the Apps Script property `PETCARE_LINE_GROUPS`.
+
 ## Deployment status
 
 The production branch is `main`. Vercel deployment requires a valid Vercel login/token and the Google/LINE credentials above; none are stored in this repository.
