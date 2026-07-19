@@ -147,4 +147,60 @@ describe('GAS LINE webhook relay', () => {
     })
     expect(JSON.parse(rejected.value).message).toContain('Invalid GAS webhook relay secret')
   })
+
+  it('claims a captured group for a Google account and sets the active reminder target', () => {
+    const code = readFileSync(resolve(process.cwd(), 'gas/Code.gs'), 'utf8')
+    const groupId = 'C12345678901234567890123456789ab'
+    const properties = {
+      GAS_WEBHOOK_SECRET: 'relay-secret',
+      PETCARE_LINE_GROUPS: JSON.stringify({
+        [groupId]: {
+          group_id: groupId,
+          group_name: 'ครอบครัวโมจิ',
+          status: 'active',
+          created_at: '2026-07-19T10:00',
+          updated_at: '2026-07-19T10:00',
+        },
+      }),
+    }
+    const sandbox = {
+      PropertiesService: {
+        getScriptProperties: () => ({
+          getProperty: key => properties[key] || '',
+          setProperty: (key, value) => {
+            properties[key] = value
+          },
+        }),
+      },
+      ContentService: {
+        MimeType: { JSON: 'json' },
+        createTextOutput: value => ({
+          value,
+          setMimeType() {
+            return this
+          },
+        }),
+      },
+    }
+    vm.createContext(sandbox)
+    vm.runInContext(code, sandbox)
+
+    const result = sandbox.doPost({
+      postData: {
+        contents: JSON.stringify({
+          action: 'selectLineGroup',
+          relay_secret: 'relay-secret',
+          owner_email: 'Owner@Example.com',
+          group_id: groupId,
+        }),
+      },
+    })
+    const body = JSON.parse(result.value)
+
+    expect(body).toMatchObject({ status: 'ok', selected_group_id: groupId })
+    expect(body.groups[0]).toMatchObject({ group_id: groupId, group_name: 'ครอบครัวโมจิ', selected: true })
+    expect(properties.TARGET_ID).toBe(groupId)
+    expect(JSON.parse(properties.PETCARE_LINE_GROUP_SELECTIONS)).toEqual({ 'owner@example.com': groupId })
+    expect(JSON.parse(properties.PETCARE_LINE_GROUPS)[groupId].owner_email).toBe('owner@example.com')
+  })
 })

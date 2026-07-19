@@ -3,3 +3,5 @@
 .setting-google button { display: block; margin-top: 6px }
 .setting-google a { display: block; margin-top: 6px; color: #624a3e; font-size: 12px }
 .setting-google small[role="alert"] { display: block; margin-top: 5px }
+.google-consent { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; color: #624a3e; font-size: 12px; line-height: 1.45 }
+.google-consent input { margin-top: 2px }
