@@ -39,16 +39,25 @@ function isValidSignature(rawBody, signature, secret) {
 
 async function postToGas(gasUrl, body) {
   let target = gasUrl
+  let method = 'POST'
+  let requestBody = body
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await globalThis.fetch(target, {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    })
+    const options = { method, redirect: 'manual' }
+    if (requestBody !== undefined) {
+      options.headers = { 'Content-Type': 'application/json' }
+      options.body = requestBody
+    }
+    const result = await globalThis.fetch(target, options)
     if (![301, 302, 303, 307, 308].includes(result.status)) return result
     const location = result.headers.get('location')
     if (!location) return result
+    // Apps Script ContentService returns 302 to a one-time
+    // script.googleusercontent.com URL. Follow browser/fetch semantics: the
+    // redirected content is retrieved with GET, while 307/308 preserve POST.
+    if (result.status === 303 || ((result.status === 301 || result.status === 302) && method === 'POST')) {
+      method = 'GET'
+      requestBody = undefined
+    }
     target = new URL(location, target).toString()
   }
   throw new Error('GAS webhook redirect limit exceeded')
