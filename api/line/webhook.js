@@ -82,6 +82,11 @@ export default async function handler(request, response) {
     if (!Array.isArray(payload.events)) {
       return response.status(400).json({ status: 'error', message: 'Invalid LINE webhook payload' })
     }
+    // LINE sends an empty events array when its console verifies the webhook
+    // URL. There is nothing to persist in GAS, so acknowledge it immediately.
+    if (payload.events.length === 0) {
+      return response.status(200).json({ status: 'ok' })
+    }
 
     const gasResponse = await postToGas(gasUrl, JSON.stringify({
       action: 'lineWebhookRelay',
