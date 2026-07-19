@@ -39,6 +39,7 @@ var SHEETS = {
 var PETCARE_SPREADSHEET_ID = 'PETCARE_SPREADSHEET_ID'
 var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 var LINE_GROUPS_PROPERTY = 'PETCARE_LINE_GROUPS'
+var LINE_GROUP_SELECTIONS_PROPERTY = 'PETCARE_LINE_GROUP_SELECTIONS'
 
 var DEFAULT_LOG_TYPES = [
   ['med',     'ให้ยา',       'Medicine', '💊', 'FALSE', 'TRUE', '1'],
@@ -151,20 +152,24 @@ function doPost(e) {
   try {
     var body = (e && e.postData && e.postData.contents) || '{}'
     var p = JSON.parse(body)
-    if (p.action !== 'lineWebhookRelay') {
-      return json({ status: 'error', message: 'unknown POST action' })
-    }
-    return handleLineWebhookRelay(p.payload, p.relay_secret)
+    if (p.action === 'lineWebhookRelay') return handleLineWebhookRelay(p.payload, p.relay_secret)
+    if (p.action === 'lineGroupCatalog') return handleLineGroupCatalog(p.owner_email, '', p.relay_secret)
+    if (p.action === 'selectLineGroup') return handleLineGroupCatalog(p.owner_email, p.group_id, p.relay_secret)
+    return json({ status: 'error', message: 'unknown POST action' })
   } catch (err) {
     return json({ status: 'error', message: String(err.message || err) })
   }
 }
 
-function handleLineWebhookRelay(payload, relaySecret) {
+function verifyGasRelaySecret(relaySecret) {
   var expected = String(PropertiesService.getScriptProperties().getProperty(GAS_WEBHOOK_SECRET) || '')
   if (!expected || !constantTimeEqual(expected, String(relaySecret || ''))) {
     throw new Error('Invalid GAS webhook relay secret')
   }
+}
+
+function handleLineWebhookRelay(payload, relaySecret) {
+  verifyGasRelaySecret(relaySecret)
   if (!payload || !Array.isArray(payload.events)) {
     throw new Error('Invalid relayed LINE webhook payload')
   }
@@ -177,6 +182,75 @@ function handleLineWebhookRelay(payload, relaySecret) {
     if (group) groups.push(group)
   })
   return json({ status: 'ok', event_count: payload.events.length, group_count: groups.length })
+}
+
+function handleLineGroupCatalog(ownerEmail, selectedGroupId, relaySecret) {
+  verifyGasRelaySecret(relaySecret)
+  var email = String(ownerEmail || '').trim().toLowerCase()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Invalid Google account email')
+
+  var props = PropertiesService.getScriptProperties()
+  var groups = parseJsonProperty(props, LINE_GROUPS_PROPERTY)
+  var selections = parseJsonProperty(props, LINE_GROUP_SELECTIONS_PROPERTY)
+  var requestedId = String(selectedGroupId || '').trim()
+
+  if (requestedId) {
+    var requested = groups[requestedId]
+    if (!requested || requested.status !== 'active') throw new Error('LINE group is not available')
+    if (requested.owner_email && requested.owner_email !== email) throw new Error('LINE group is already linked to another account')
+    requested.owner_email = email
+    requested.updated_at = nowIso()
+    groups[requestedId] = requested
+    selections[email] = requestedId
+    props.setProperty(LINE_GROUPS_PROPERTY, JSON.stringify(groups))
+    props.setProperty(LINE_GROUP_SELECTIONS_PROPERTY, JSON.stringify(selections))
+    // Keep the existing reminder trigger functional while recipient-per-sheet
+    // delivery is introduced incrementally.
+    props.setProperty('TARGET_ID', requestedId)
+  }
+
+  var selectedId = String(selections[email] || '')
+  var visibleGroups = Object.keys(groups).map(function (groupId) {
+    var group = groups[groupId]
+    if (group.owner_email && group.owner_email !== email) return null
+    if (!group.group_name) {
+      var summary = getLineGroupSummary(groupId)
+      if (summary) {
+        group.group_name = summary.groupName || ''
+        group.picture_url = summary.pictureUrl || ''
+        groups[groupId] = group
+      }
+    }
+    return {
+      group_id: groupId,
+      group_name: group.group_name || ('LINE Group ' + groupId.slice(-6)),
+      picture_url: group.picture_url || '',
+      updated_at: group.updated_at || '',
+      selected: groupId === selectedId,
+    }
+  }).filter(Boolean)
+
+  props.setProperty(LINE_GROUPS_PROPERTY, JSON.stringify(groups))
+  return json({ status: 'ok', groups: visibleGroups, selected_group_id: selectedId })
+}
+
+function parseJsonProperty(props, key) {
+  try { return JSON.parse(props.getProperty(key) || '{}') || {} } catch (err) { return {} }
+}
+
+function getLineGroupSummary(groupId) {
+  var token = String(PropertiesService.getScriptProperties().getProperty('LINE_TOKEN') || '')
+  if (!token) return null
+  try {
+    var response = UrlFetchApp.fetch('https://api.line.me/v2/bot/group/' + encodeURIComponent(groupId) + '/summary', {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    })
+    if (response.getResponseCode() !== 200) return null
+    return JSON.parse(response.getContentText() || '{}')
+  } catch (err) {
+    return null
+  }
 }
 
 function constantTimeEqual(left, right) {
@@ -204,7 +278,10 @@ function rememberLineGroup(groupId, eventType) {
   var existing = groups[normalizedId] || { group_id: normalizedId, created_at: now }
   groups[normalizedId] = {
     group_id: normalizedId,
-    status: 'active',
+    group_name: existing.group_name || '',
+    picture_url: existing.picture_url || '',
+    owner_email: existing.owner_email || '',
+    status: String(eventType || '') === 'leave' ? 'inactive' : 'active',
     last_event: String(eventType || ''),
     created_at: existing.created_at || now,
     updated_at: now,

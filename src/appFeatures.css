@@ -1,0 +1,73 @@
+.google-onboarding-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(48, 39, 35, .62);
+}
+
+.google-onboarding-dialog {
+  width: min(100%, 390px);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 22px 20px 20px;
+  border: 1px solid #dec6b0;
+  border-radius: 16px;
+  background: #fffdfb;
+  color: #624a3e;
+}
+
+.google-onboarding-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #dec6b0;
+  border-radius: 12px;
+  background: #f7eee6;
+  font: 700 21px system-ui, sans-serif;
+}
+
+.google-onboarding-kicker { margin: 16px 0 4px; color: #7a5947; font-size: 12px; }
+.google-onboarding-dialog h2 { margin: 0; color: #4d382f; font-size: 22px; line-height: 1.25; text-wrap: balance; }
+.google-onboarding-dialog > p:not(.google-onboarding-kicker) { margin: 10px 0 0; color: #624a3e; font-size: 13px; line-height: 1.55; }
+.google-onboarding-benefits { display: grid; gap: 6px; margin: 14px 0 2px; padding-left: 18px; font-size: 12px; line-height: 1.45; }
+.google-onboarding-dialog .setting-google { margin: 16px 0 0; padding: 14px 0 0; border: 0; border-top: 1px solid #ead8c8; border-radius: 0; }
+
+.line-group-settings { margin-top: 18px; padding-top: 16px; border-top: 1px solid #ead8c8; }
+.line-group-heading { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.line-group-heading h2 { margin: 0 0 2px; }
+.line-group-heading small { color: #624a3e; font-size: 12px; }
+.line-group-list { display: grid; gap: 8px; margin: 10px 0; }
+.line-group-option { display: flex; gap: 10px; align-items: center; padding: 10px; border: 1px solid #dec6b0; border-radius: 12px; cursor: pointer; }
+.line-group-option.selected { border-color: #624a3e; background: #f7eee6; }
+.line-group-option input { width: 16px; height: 16px; accent-color: #624a3e; }
+.line-group-option > span:last-child { min-width: 0; }
+.line-group-option b, .line-group-option small { display: block; }
+.line-group-option small { color: #624a3e; font-size: 11px; }
+.line-group-avatar { display: grid; flex: 0 0 38px; width: 38px; height: 38px; place-items: center; overflow: hidden; border-radius: 50%; background: #06c755; color: #fff; font: 700 10px system-ui, sans-serif; }
+.line-group-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.line-group-empty { margin: 10px 0; padding: 12px; border-radius: 12px; background: #f7eee6; }
+.line-group-empty p, .line-group-status { margin: 4px 0 0; color: #624a3e; font-size: 12px; line-height: 1.5; }
+.line-group-error { display: block; margin-top: 8px; color: #9b3f32; font-size: 12px; }
+
+.reminder-recipient { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; padding: 12px; border-radius: 12px; background: #f7eee6; }
+.reminder-recipient small, .reminder-recipient b { display: block; }
+.reminder-recipient small { color: #624a3e; font-size: 11px; }
+
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid rgba(98, 74, 62, .32); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .google-onboarding-dialog { animation: google-onboarding-in 180ms cubic-bezier(.22, 1, .36, 1); }
+}
+
+@keyframes google-onboarding-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .google-onboarding-dialog { animation: none; }
+}
