@@ -67,7 +67,10 @@ async function initializeSchema(accessToken, spreadsheet) {
 export async function createOrFindPetCareSheet(accessToken, email) {
   const title = buildPetCareSheetTitle(email)
   const query = encodeURIComponent(`name = '${title.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`)
-  const existing = await apiFetch(`${DRIVE_API}/files?q=${query}&spaces=drive&orderBy=modifiedTime%20desc&pageSize=10&fields=files(id,name,webViewLink)`)
+  const existing = await apiFetch(
+    `${DRIVE_API}/files?q=${query}&spaces=drive&orderBy=modifiedTime%20desc&pageSize=10&fields=files(id,name,webViewLink)`,
+    { headers: authHeaders(accessToken) },
+  )
   if (existing.files?.[0]) {
     const file = existing.files[0]
     return { spreadsheetId: file.id, spreadsheetUrl: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`, created: false, name: file.name }

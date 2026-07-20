@@ -34,5 +34,8 @@ describe('Google Sheet schema', () => {
     expect(result).toMatchObject({ spreadsheetId: 'sheet-1', created: false })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0][0]).toContain('drive/v3/files')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      headers: { Authorization: 'Bearer token' },
+    })
   })
 })
