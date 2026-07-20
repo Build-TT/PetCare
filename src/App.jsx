@@ -6,6 +6,7 @@ import ReminderForm from './components/ReminderForm.jsx'
 import GoogleDriveOnboarding from './components/GoogleDriveOnboarding.jsx'
 import { hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, unwrapPendingState } from './remoteState.js'
 import { provisionGoogleLineLink } from './gasProvisioning.js'
+import { getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
 import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
 import './index.css'
 import './appFeatures.css'
@@ -232,7 +233,8 @@ function migrateLegacyOwners(state) {
 function App({ initialPage = 'home' }) {
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
   const rememberedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
-  const hasCompletedGoogleOnboarding = window.localStorage.getItem(GOOGLE_ONBOARDING_KEY) === 'connected' || Boolean(rememberedGoogleSheet?.spreadsheetId)
+  const hasRememberedGoogleSheet = Boolean(rememberedGoogleSheet?.spreadsheetId)
+  const hasCompletedGoogleOnboarding = hasRememberedGoogleSheet
   const [page, setPage] = useState(MAIN_APP_PAGES.has(initialPage) ? initialPage : 'home')
   const [pets, setPets] = useState(initial.pets ?? defaultPets)
   const [activePetId, setActivePetId] = useState(initial.activePetId ?? (initial.pets ?? defaultPets)[0]?.id)
@@ -736,6 +738,36 @@ function App({ initialPage = 'home' }) {
     setStructuredReminderFormOpen(false)
     setStructuredReminderEditId('')
   }
+
+  useEffect(() => {
+    if (!hasRememberedGoogleSheet) {
+      setShowGoogleOnboarding(true)
+      return undefined
+    }
+    let cancelled = false
+    const restoreGoogleConnection = async () => {
+      try {
+        const accessToken = await requestGoogleAccessToken()
+        const profile = await getGoogleUserProfile(accessToken)
+        if (cancelled) return
+        const connection = {
+          ...rememberedGoogleSheet,
+          email: profile.email || rememberedGoogleSheet.email,
+          accessToken,
+        }
+        await handleGoogleConnected(connection)
+      } catch (error) {
+        if (cancelled) return
+        setGoogleConnection(null)
+        setRemoteReady(false)
+        setShowGoogleOnboarding(true)
+        setSyncStatus('error')
+        setSyncError(error.message || 'กรุณาเชื่อมต่อ Google Sheet ใหม่')
+      }
+    }
+    restoreGoogleConnection()
+    return () => { cancelled = true }
+  }, [])
 
   const editReminder = reminder => {
     setStructuredReminderEditId(reminder.id)
