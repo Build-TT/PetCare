@@ -12,16 +12,21 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, li
   const [consentAccepted, setConsentAccepted] = useState(initialConsentAccepted)
 
   useEffect(() => {
-    if (connectedConnection) setConnection(connectedConnection)
+    if (connectedConnection) {
+      setConnection(connectedConnection)
+      setConsentAccepted(true)
+    }
   }, [connectedConnection])
 
   const connect = async (createNew = false) => {
-    if (!isGoogleConfigured() || !consentAccepted) return
+    const existingAccessToken = connection?.accessToken || connectedConnection?.accessToken
+    if (!isGoogleConfigured() || (!consentAccepted && !existingAccessToken)) return
     setBusy(true)
     setError('')
     try {
-      const accessToken = await requestGoogleAccessToken()
-      const profile = await getGoogleUserProfile(accessToken)
+      const accessToken = existingAccessToken || await requestGoogleAccessToken()
+      const connectedEmail = connection?.email || connectedConnection?.email
+      const profile = connectedEmail && existingAccessToken ? { email: connectedEmail } : await getGoogleUserProfile(accessToken)
       if (!profile.email) throw new Error('ไม่พบอีเมลของ Google Account')
       let cachedConnection = null
       try { cachedConnection = JSON.parse(window.localStorage.getItem(CONNECTION_META_KEY) || 'null') } catch { /* ignore invalid cache */ }
