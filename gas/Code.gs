@@ -652,12 +652,14 @@ function checkNormalizedReminders(ss) {
   var petName = buildPetNameMap()
   var nowHour = new Date().getHours()
   var todayStr = today()
-  if (nowHour !== 8) return
-
   rows.forEach(function (raw) {
     var reminder = rowToObj(headers, raw)
     if (!reminder.id || String(reminder.active).toUpperCase() === 'FALSE') return
     if (!isNormalizedReminderDue(reminder, todayStr)) return
+    var reminderConfig = parseConfig(reminder.schedule_config)
+    var configuredHour = parseInt(String(reminderConfig.time || '08:00').split(':')[0], 10)
+    if (isNaN(configuredHour)) configuredHour = 8
+    if (nowHour !== configuredHour) return
 
     var recipients = getReminderRecipients(reminder.id)
     if (!recipients.length) {
@@ -681,6 +683,22 @@ function isNormalizedReminderDue(reminder, dateStr) {
 
   var date = parseDate(dateStr)
   var startDate = parseDate(start)
+  if (frequency === 'recurring' || frequency === 'custom') {
+    var interval = Math.max(parseInt(config.interval, 10) || 1, 1)
+    var unit = String(config.unit || 'day').toLowerCase()
+    if (unit === 'day') {
+      return Math.round((date - startDate) / 86400000) % interval === 0
+    }
+    if (unit === 'month') {
+      var monthsSinceStart = (date.getFullYear() - startDate.getFullYear()) * 12 + date.getMonth() - startDate.getMonth()
+      var monthDay = config.monthMode === 'fixed_day' ? config.day : startDate.getDate()
+      return monthsSinceStart >= 0 && monthsSinceStart % interval === 0 && date.getDate() === clampDay(monthDay, date)
+    }
+    if (unit === 'year') {
+      var yearsSinceStart = date.getFullYear() - startDate.getFullYear()
+      return yearsSinceStart >= 0 && yearsSinceStart % interval === 0 && date.getMonth() === startDate.getMonth() && date.getDate() === clampDay(startDate.getDate(), date)
+    }
+  }
   if (frequency === 'ทุกสัปดาห์' || frequency === 'weekly') {
     return Math.round((date - startDate) / 86400000) % 7 === 0
   }
