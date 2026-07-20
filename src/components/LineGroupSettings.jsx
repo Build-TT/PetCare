@@ -12,11 +12,13 @@ export default function LineGroupSettings({ connection, onSelected }) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [savedMessage, setSavedMessage] = useState('')
 
   const loadGroups = async () => {
     if (!connection?.accessToken) return
     setLoading(true)
     setError('')
+    setSavedMessage('')
     try {
       const response = await fetch('/api/line/groups', {
         headers: { Authorization: `Bearer ${connection.accessToken}` },
@@ -40,6 +42,7 @@ export default function LineGroupSettings({ connection, onSelected }) {
     if (!selectedId || !connection?.accessToken) return
     setSaving(true)
     setError('')
+    setSavedMessage('')
     try {
       const response = await fetch('/api/line/groups', {
         method: 'POST',
@@ -60,6 +63,7 @@ export default function LineGroupSettings({ connection, onSelected }) {
       setGroups(body.groups || [])
       setSelectedId(body.selected_group_id)
       onSelected?.(metadata)
+      setSavedMessage('บันทึกกลุ่มนี้เป็นผู้รับแจ้งเตือนแล้ว')
     } catch (saveError) {
       setError(saveError.message || 'บันทึก LINE Group ไม่สำเร็จ')
     } finally {
@@ -82,6 +86,7 @@ export default function LineGroupSettings({ connection, onSelected }) {
       <span><b>{group.group_name}</b><small>Group ID ลงท้าย {group.group_id.slice(-6)}</small></span>
     </label>)}</div>}
     {groups.length > 0 && <button type="button" className="primary" onClick={saveSelection} disabled={!selectedId || saving}>{saving ? 'กำลังบันทึก…' : 'ใช้กลุ่มนี้รับการแจ้งเตือน'}</button>}
+    {savedMessage && <small role="status" className="line-group-success">{savedMessage}</small>}
     {error && <small role="alert" className="line-group-error">{error}</small>}
   </section>
 }
