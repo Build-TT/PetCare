@@ -6,22 +6,21 @@ import ManagePets from './liff/ManagePets.jsx'
 import ManageMeds from './liff/ManageMeds.jsx'
 import ManageTypes from './liff/ManageTypes.jsx'
 import PetDetail from './pages/PetDetail.jsx'
+import { parseRoute } from './routes.js'
 import './index.css'
 
-// routing ด้วย ?page= และรองรับ liff.state (ตอนเปิดผ่าน LINE)
-function Router() {
-  const params = new URLSearchParams(window.location.search)
-  const liffState = decodeURIComponent(params.get('liff.state') || '')
-  const qs = liffState.includes('?') ? liffState.split('?')[1] : ''
-  const sp = new URLSearchParams(qs)
-  const page = sp.get('page') || params.get('page')
+export { MAIN_APP_PAGES, parseRoute as resolveRoute } from './routes.js'
 
-  if (page === 'log')   return <AddLog />
-  if (page === 'pets')  return <ManagePets />
-  if (page === 'meds')  return <ManageMeds />
-  if (page === 'types') return <ManageTypes />
-  if (page === 'pet')   return <PetDetail petId={sp.get('id') || params.get('id')} />
-  return <App />
+// Main-app pages stay inside App; LIFF tools remain explicit full-page routes.
+export function Router() {
+  const route = parseRoute()
+
+  if (route.kind === 'log') return <AddLog />
+  if (route.kind === 'pets') return <ManagePets />
+  if (route.kind === 'meds') return <ManageMeds />
+  if (route.kind === 'types') return <ManageTypes />
+  if (route.kind === 'pet') return <PetDetail petId={route.petId} />
+  return <App initialPage={route.page} />
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

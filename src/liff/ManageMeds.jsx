@@ -5,6 +5,7 @@ import { t, useLang } from '../i18n.js'
 import { S, tap } from '../ui.js'
 import { SCHEDULE_TYPES, describeSchedule, computeNextDue, isScheduledOn } from '../schedule.js'
 import LangToggle from '../components/LangToggle.jsx'
+import GoogleSheetLink from './GoogleSheetLink.jsx'
 
 const EMPTY = {
   id: '', pet_id: '', med_name: '', dose: '',
@@ -19,21 +20,28 @@ export default function ManageMeds() {
   const [form, setForm] = useState(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
 
-  useEffect(() => { initLiff('meds'); load() }, [])
+  useEffect(() => {
+    ;(async () => {
+      try { await initLiff('meds'); await load() } catch (e) { setLoadError(e.message || t('error', lang)); setLoading(false) }
+    })()
+  }, [])
 
   async function load() {
     setLoading(true)
+    setLoadError('')
     try {
       const [petRows, schedRows] = await Promise.all([
         fetchSheet('pets'),
-        fetchSheet('med_schedules').catch(() => []),
+        fetchSheet('med_schedules'),
       ])
       setPets(petRows.filter(p => String(p.active).toUpperCase() !== 'FALSE'))
       setScheds(schedRows
         .filter(s => String(s.active).toUpperCase() !== 'FALSE')
         .map(s => ({ ...s, config: parseCfg(s.config) })))
-    } catch (e) { setToast(t('error', lang)) }
+    } catch (e) { setLoadError(e.message || t('error', lang)) }
     setLoading(false)
   }
 
@@ -46,6 +54,7 @@ export default function ManageMeds() {
   async function save() {
     if (!form.pet_id || !form.med_name.trim() || busy) return
     setBusy(true)
+    setActionError('')
     try {
       const isNew = !form.id
       await sendToGAS({
@@ -63,7 +72,7 @@ export default function ManageMeds() {
       setToast(t('saved', lang))
       setForm(null)
       await load()
-    } catch (e) { setToast(t('error', lang)) }
+    } catch (e) { setActionError(e.message || t('error', lang)) }
     setBusy(false)
   }
 
@@ -96,8 +105,15 @@ export default function ManageMeds() {
         <LangToggle />
       </div>
 
+      <GoogleSheetLink pageKey="meds" onLinked={load} />
+
       {loading ? (
         <p style={S.muted}>{t('loading', lang)}</p>
+      ) : loadError ? (
+        <div role="alert" style={S.danger}>
+          <p>{loadError}</p>
+          <button style={S.ghost} {...tap(load)}>Retry</button>
+        </div>
       ) : pets.length === 0 ? (
         <div style={S.card}>
           <p style={S.muted}>{t('no_pets', lang)}</p>
@@ -139,6 +155,7 @@ export default function ManageMeds() {
             )
           })}
 
+          {actionError && <div role="alert" style={S.danger}><p>{actionError}</p><button style={S.ghost} {...tap(save)}>Retry</button></div>}
           {form ? (
             <ScheduleForm form={form} setForm={setForm} pets={pets} lang={lang}
               busy={busy} onSave={save} onCancel={() => setForm(null)} />

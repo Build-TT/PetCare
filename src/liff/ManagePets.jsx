@@ -4,6 +4,7 @@ import { bustCache } from '../cache.js'
 import { t, useLang } from '../i18n.js'
 import { S, tap, PET_COLORS } from '../ui.js'
 import LangToggle from '../components/LangToggle.jsx'
+import GoogleSheetLink from './GoogleSheetLink.jsx'
 
 const SPECIES = [
   { key: 'dog', icon: '🐶' },
@@ -20,16 +21,23 @@ export default function ManagePets() {
   const [form, setForm] = useState(null) // null = ไม่เปิดฟอร์ม
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
 
-  useEffect(() => { initLiff('pets'); load() }, [])
+  useEffect(() => {
+    ;(async () => {
+      try { await initLiff('pets'); await load() } catch (e) { setLoadError(e.message || t('error', lang)); setLoading(false) }
+    })()
+  }, [])
 
   async function load() {
     setLoading(true)
+    setLoadError('')
     try {
       const rows = await fetchSheet('pets')
       setPets(rows.filter(p => String(p.active).toUpperCase() !== 'FALSE'))
     } catch (e) {
-      setToast(t('error', lang))
+      setLoadError(e.message || t('error', lang))
     }
     setLoading(false)
   }
@@ -41,6 +49,7 @@ export default function ManagePets() {
   async function save() {
     if (!form.name.trim() || busy) return
     setBusy(true)
+    setActionError('')
     try {
       const isNew = !form.id
       const payload = {
@@ -59,7 +68,7 @@ export default function ManagePets() {
       setForm(null)
       await load()
     } catch (e) {
-      setToast(t('error', lang))
+      setActionError(e.message || t('error', lang))
     }
     setBusy(false)
   }
@@ -81,9 +90,15 @@ export default function ManagePets() {
         <h1 style={S.title}>🐾 {t('pets', lang)}</h1>
         <LangToggle />
       </div>
+      <GoogleSheetLink pageKey="pets" onLinked={load} />
 
       {loading ? (
         <p style={S.muted}>{t('loading', lang)}</p>
+      ) : loadError ? (
+        <div role="alert" style={S.danger}>
+          <p>{loadError}</p>
+          <button style={S.ghost} {...tap(load)}>Retry</button>
+        </div>
       ) : (
         <>
           {pets.length === 0 && !form && <p style={S.muted}>{t('no_pets', lang)}</p>}
@@ -116,6 +131,7 @@ export default function ManagePets() {
             )
           })}
 
+          {actionError && <div role="alert" style={S.danger}><p>{actionError}</p><button style={S.ghost} {...tap(save)}>Retry</button></div>}
           {form ? (
             <div style={{ ...S.card, border: '2px solid #bbf7d0' }}>
               <label style={S.label}>{t('pet_name', lang)}</label>
