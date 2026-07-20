@@ -21,4 +21,12 @@ describe('ReminderForm', () => {
       frequency: 'recurring', interval: 2, unit: 'month', monthMode: 'fixed_day', day: 15, time: '18:30',
     }))
   })
+
+  it('prefills an existing reminder for editing', () => {
+    render(<ReminderForm initialValue={{ title: 'เดิม', date: '2026-08-01', frequency: 'recurring', interval: 3, unit: 'day', time: '07:15' }} onSave={vi.fn()} onCancel={vi.fn()} />)
+
+    expect(screen.getByLabelText('ชื่อการแจ้งเตือน').value).toBe('เดิม')
+    expect(screen.getByLabelText('ทุกกี่หน่วย').value).toBe('3')
+    expect(screen.getByLabelText('เวลาแจ้งเตือน').value).toBe('07:15')
+  })
 })

@@ -12,17 +12,17 @@ function buildDetail(config) {
   return `${config.date} · ${detail}`
 }
 
-export default function ReminderForm({ onSave, onCancel }) {
+export default function ReminderForm({ initialValue, onSave, onCancel }) {
   const today = new Date()
   const defaultDate = ''
-  const [title, setTitle] = useState('')
-  const [date, setDate] = useState(defaultDate)
-  const [frequency, setFrequency] = useState('once')
-  const [interval, setInterval] = useState('1')
-  const [unit, setUnit] = useState('month')
-  const [time, setTime] = useState('08:00')
-  const [monthMode, setMonthMode] = useState('anniversary')
-  const [day, setDay] = useState(String(today.getDate()))
+  const [title, setTitle] = useState(initialValue?.title || '')
+  const [date, setDate] = useState(initialValue?.date || defaultDate)
+  const [frequency, setFrequency] = useState(initialValue?.frequency || 'once')
+  const [interval, setInterval] = useState(String(initialValue?.interval || 1))
+  const [unit, setUnit] = useState(initialValue?.unit || 'month')
+  const [time, setTime] = useState(initialValue?.time || '08:00')
+  const [monthMode, setMonthMode] = useState(initialValue?.monthMode || 'anniversary')
+  const [day, setDay] = useState(String(initialValue?.day || today.getDate()))
   const [error, setError] = useState('')
 
   const save = () => {
