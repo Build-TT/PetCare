@@ -118,9 +118,10 @@ function columnName(number) {
   return result
 }
 
-export async function createOrFindPetCareSheet(accessToken, email, preferredSpreadsheetId = '') {
-  const title = buildPetCareSheetTitle(email)
-  if (preferredSpreadsheetId) {
+export async function createOrFindPetCareSheet(accessToken, email, preferredSpreadsheetId = '', options = {}) {
+  const createNew = options.createNew === true
+  const title = createNew ? `PetCare Production - ${String(email).trim()}` : buildPetCareSheetTitle(email)
+  if (!createNew && preferredSpreadsheetId) {
     try {
       const file = await apiFetch(`${DRIVE_API}/files/${encodeURIComponent(preferredSpreadsheetId)}?fields=id,name,mimeType,webViewLink`, { headers: authHeaders(accessToken) })
       if (file?.mimeType === 'application/vnd.google-apps.spreadsheet') {
@@ -138,6 +139,18 @@ export async function createOrFindPetCareSheet(accessToken, email, preferredSpre
     }
   }
   const query = encodeURIComponent(`name = '${title.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`)
+  if (createNew) {
+    const spreadsheet = await apiFetch(`${SHEETS_API}/spreadsheets`, {
+      method: 'POST', headers: authHeaders(accessToken), body: JSON.stringify({ properties: { title } }),
+    })
+    await initializeSchema(accessToken, spreadsheet)
+    return {
+      spreadsheetId: spreadsheet.spreadsheetId,
+      spreadsheetUrl: spreadsheet.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheet.spreadsheetId}/edit`,
+      created: true,
+      name: title,
+    }
+  }
   const existing = await apiFetch(`${DRIVE_API}/files?q=${query}&spaces=drive&orderBy=modifiedTime%20desc&pageSize=10&fields=files(id,name,webViewLink)`, { headers: authHeaders(accessToken) })
   if (existing.files?.[0]) {
     const file = existing.files[0]

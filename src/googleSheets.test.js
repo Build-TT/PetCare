@@ -64,6 +64,23 @@ describe('Google Sheet schema', () => {
     expect(fetchMock.mock.calls[0][0]).toContain('/drive/v3/files/sheet-cached')
   })
 
+  it('creates a separate production Sheet when explicitly requested', async () => {
+    const fetchMock = vi.fn().mockImplementation((url, options = {}) => ({
+      ok: true,
+      json: async () => url.includes('/spreadsheets') && options.method === 'POST'
+        ? { spreadsheetId: 'sheet-production', spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-production/edit', sheets: Object.keys(PETCARE_SHEETS).map(title => ({ properties: { title, sheetId: title } })) }
+        : url.includes('values:batchGet') ? { valueRanges: Object.keys(PETCARE_SHEETS).map(() => ({ values: [['id']] })) }
+          : { updated: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await createOrFindPetCareSheet('token', 'owner@example.com', 'sheet-test', { createNew: true })
+
+    expect(result).toMatchObject({ spreadsheetId: 'sheet-production', created: true, name: 'PetCare Production - owner@example.com' })
+    expect(fetchMock.mock.calls[0][0]).toContain('/spreadsheets')
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' })
+  })
+
   it('does not rename an existing first sheet during partial schema recovery', async () => {
     const fetchMock = vi.fn().mockImplementation((url, _options = {}) => ({
       ok: true,
