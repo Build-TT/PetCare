@@ -558,3 +558,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .line-group-empty p, .line-group-status { margin: 4px 0 0; color: var(--pet-muted); font-size: 12px; line-height: 1.5; }
 .line-group-error { display: block; margin-top: 8px; color: var(--pet-coral); font-size: 12px; }
 .line-group-success { display: block; margin-top: 8px; color: #2f7d5b; font-size: 12px; }
+.reminder-interval-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.reminder-form label { display: block; margin-bottom: 9px; }
+.reminder-form input, .reminder-form select { width: 100%; margin-top: 4px; }

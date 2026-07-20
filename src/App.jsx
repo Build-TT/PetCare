@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { summarizeSymptoms } from './domain/summary.js'
 import { loadStoredState, saveStoredState } from './domain/storage.js'
 import SettingsSurface from './components/SettingsSurface.jsx'
+import ReminderForm from './components/ReminderForm.jsx'
 import GoogleDriveOnboarding from './components/GoogleDriveOnboarding.jsx'
 import { hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, unwrapPendingState } from './remoteState.js'
 import { provisionGoogleLineLink } from './gasProvisioning.js'
@@ -296,6 +297,7 @@ function App({ initialPage = 'home' }) {
   const [reminderDate, setReminderDate] = useState('')
   const [reminderFrequency, setReminderFrequency] = useState('ครั้งเดียว')
   const [reminderError, setReminderError] = useState('')
+  const [structuredReminderFormOpen, setStructuredReminderFormOpen] = useState(false)
   const [editingLogId, setEditingLogId] = useState('')
   const [logEditDatetime, setLogEditDatetime] = useState('')
   const [logEditDiary, setLogEditDiary] = useState('')
@@ -712,6 +714,20 @@ function App({ initialPage = 'home' }) {
     setReminderTitle(''); setReminderDate(''); setReminderFrequency('ครั้งเดียว'); setReminderError('')
   }
 
+  const saveStructuredReminder = config => {
+    setReminders([...reminders, {
+      id: `r${Date.now()}`,
+      pet_id: activePet.id,
+      title: config.title,
+      detail: config.detail,
+      schedule_type: config.frequency === 'once' ? 'once' : 'recurring',
+      schedule_config: { ...config },
+      start_at: config.date,
+      enabled: true,
+    }])
+    setStructuredReminderFormOpen(false)
+  }
+
   const handleProfilePhoto = event => {
     const file = event.target.files?.[0]
     if (!file || !file.type.startsWith('image/')) return
@@ -719,6 +735,13 @@ function App({ initialPage = 'home' }) {
     reader.onload = () => setProfilePhoto(String(reader.result || ''))
     reader.readAsDataURL(file)
   }
+
+  useEffect(() => {
+    if (reminderFormOpen) {
+      setReminderFormOpen(false)
+      setStructuredReminderFormOpen(true)
+    }
+  }, [reminderFormOpen])
 
   useEffect(() => {
     if (!profileOpen && profileFormOpen) resetProfileForm()
@@ -787,6 +810,7 @@ function App({ initialPage = 'home' }) {
     {page === 'track' && <><nav className="tabs" aria-label="แท็บติดตาม"><button className={trackTab === 'track' ? 'active' : ''} onClick={() => setTrackTab('track')}>Track</button><button className={trackTab === 'activity' ? 'active' : ''} onClick={() => setTrackTab('activity')}>กิจวัตร</button></nav>{trackTab === 'track' ? <><div className="section-title"><h2>รายการที่กำลังติดตาม</h2><button className="add-button" onClick={() => openTrackForm()}>＋ เพิ่มรายการติดตาม</button></div>{trackFormOpen && <section className="form-card" aria-label="ฟอร์มรายการติดตาม"><label>ชื่อรายการ<input value={trackName} onChange={e => setTrackName(e.target.value)} /></label><label>ขนาด/รายละเอียด<input value={trackDose} onChange={e => setTrackDose(e.target.value)} /></label><label>เวลา/ความถี่<input value={trackSchedule} onChange={e => setTrackSchedule(e.target.value)} /></label><div className="form-actions"><button className="primary" disabled={!trackName.trim() || !trackSchedule.trim()} onClick={saveTrack}>{editingTrackId ? 'บันทึกการแก้ไข' : 'เพิ่มรายการ'}</button><button className="text-button" onClick={resetTrackForm}>ยกเลิก</button></div></section>}{activeTracks.map(track => <article className="track-card compact" key={track.id}><label className="track-toggle"><input type="checkbox" aria-label={`เลือก ${track.name}`} checked={selectedTracks.includes(track.id)} onChange={() => setSelectedTracks(selectedTracks.includes(track.id) ? selectedTracks.filter(id => id !== track.id) : [...selectedTracks, track.id])} /></label><div><b>{track.name}</b><small>{track.dose} · {track.schedule}</small></div></article>)}<section className="log-form"><div className="section-title"><h2>บันทึกอาการ</h2><button className="text-button" onClick={() => { setSymptomError(''); setSymptomFormOpen(true) }}>＋ เพิ่มอาการ</button></div>{symptomFormOpen && <section className="form-card" aria-label="ฟอร์มเพิ่มอาการ"><label>ชื่ออาการ<input value={symptomName} onChange={e => { setSymptomName(e.target.value); setSymptomError('') }} /></label>{symptomError && <small role="alert">{symptomError}</small>}<div className="form-actions"><button className="primary" disabled={!symptomName.trim()} onClick={addSymptom}>บันทึกอาการ</button><button className="text-button" onClick={() => setSymptomFormOpen(false)}>ยกเลิก</button></div></section>}<input aria-label="วันที่และเวลาบันทึก" type="datetime-local" value={datetime} onChange={e => setDatetime(e.target.value)} /><div className="symptom-grid">{visibleSymptoms.map(item => { const label = symptomLabel(item); return <button key={symptomKey(item)} className={selectedSymptoms.includes(label) ? 'selected' : ''} onClick={() => setSelectedSymptoms(selectedSymptoms.includes(label) ? selectedSymptoms.filter(x => x !== label) : [...selectedSymptoms, label])}>{label}</button> })}</div><textarea value={note} onChange={e => setNote(e.target.value)} placeholder="เพิ่มบันทึกไดอารี่ (ไม่บังคับ)" /><button className="primary" disabled={!canSave} onClick={saveLog}>บันทึกอาการและ Track</button></section></> : <><div className="section-title"><h2>กิจวัตร</h2><button className="primary" onClick={addActivity}>＋ บันทึกกิจวัตร</button></div>{visibleActivities.map(item => <article className="table-row" key={item.id}><time>{String(item.datetime).slice(5, 10)}<br />{String(item.datetime).slice(11, 16)}</time><div><b>{item.activity_type || item.symptom}</b><p>{item.note || item.diary}</p></div><div className="row-actions"><button onClick={() => editActivity(item)}>แก้ไข</button><button className="danger" onClick={() => setActivities(activities.filter(activity => activity.id !== item.id))}>ลบ</button></div></article>)}{activityFormOpen && <section className="form-card activity-form" aria-label="ฟอร์มกิจวัตร"><label>ประเภทกิจวัตร<select value={activityType} onChange={e => setActivityType(e.target.value)}>{ACTIVITY_TYPES.map(type => <option key={type}>{type}</option>)}</select></label>{activityType === 'อื่นๆ' && <label>ระบุประเภท<input value={activityCustomType} onChange={e => setActivityCustomType(e.target.value)} /></label>}<label>วันและเวลา<input type="datetime-local" value={activityDatetime} onChange={e => setActivityDatetime(e.target.value)} /></label><label>ระยะเวลา (นาที)<input type="number" min="0" value={activityDuration} onChange={e => setActivityDuration(e.target.value)} /></label><label>Note<textarea value={activityNote} onChange={e => setActivityNote(e.target.value)} /></label>{activityError && <small role="alert">{activityError}</small>}<button className="primary" onClick={saveActivity}>บันทึกกิจวัตร</button></section>}</>}</>}
     {page === 'diary' && <><div className="section-title"><h2>ประวัติการรักษา</h2><button className="primary" onClick={() => setTreatmentFormOpen(true)}>＋ เพิ่มประวัติการรักษา</button></div><div className="data-table">{visibleTreatmentHistory.map(item => <article className="table-row" key={item.id}><time>{item.started_at?.slice(5, 10)}<br />{item.started_at?.slice(11, 16)}</time><div><b>{item.category} · {item.title}</b><p>{item.clinic}</p>{item.doctor && <p>หมอ: {item.doctor}</p>}<p>{item.note}</p></div><div className="row-actions"><button onClick={() => editTreatment(item)}>แก้ไข</button><button className="danger" onClick={() => setTreatmentHistory(treatmentHistory.filter(history => history.id !== item.id))}>ลบ</button></div></article>)}</div>{treatmentFormOpen && <section className="form-card treatment-form" aria-label="ฟอร์มประวัติการรักษา"><label>ประเภท<select value={treatmentCategory} onChange={e => setTreatmentCategory(e.target.value)}>{TREATMENT_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>{treatmentCategory === 'อื่นๆ' && <label>ระบุประเภท<input value={treatmentCustomCategory} onChange={e => setTreatmentCustomCategory(e.target.value)} /></label>}<label>รายการ<input value={treatmentTitle} onChange={e => setTreatmentTitle(e.target.value)} /></label><label>วันที่/เวลา<input type="datetime-local" value={treatmentStartedAt} onChange={e => setTreatmentStartedAt(e.target.value)} /></label><label>คลินิก<input value={treatmentClinic} onChange={e => setTreatmentClinic(e.target.value)} /></label><label>ชื่อหมอ<input value={treatmentDoctor} onChange={e => setTreatmentDoctor(e.target.value)} placeholder="เช่น นพ. ..." /></label><label>Note<textarea value={treatmentNote} onChange={e => setTreatmentNote(e.target.value)} /></label>{treatmentError && <small role="alert">{treatmentError}</small>}<button className="primary" disabled={!treatmentTitle.trim()} onClick={saveTreatment}>บันทึก</button></section>}</>}
     {page === 'reminders' && <><div className="section-title"><h2>แจ้งเตือน</h2><button className="primary" onClick={() => setReminderFormOpen(true)}>＋ สร้างการแจ้งเตือน</button></div>{visibleReminders.map(reminder => <article className={`reminder ${reminder.enabled ? '' : 'off'}`} key={reminder.id}><b>{reminder.title}</b><p>{reminder.detail}</p><button onClick={() => setReminders(reminders.map(item => item.id === reminder.id ? { ...item, enabled: !item.enabled } : item))}>{reminder.enabled ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button><button className="danger" onClick={() => setReminders(reminders.filter(item => item.id !== reminder.id))}>ลบ</button></article>)}{reminderFormOpen && <section className="form-card" role="dialog" aria-label="ฟอร์มสร้างการแจ้งเตือน"><label>ชื่อการแจ้งเตือน<input value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></label><label>วันครบกำหนด<input type="date" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></label><label>ความถี่<select value={reminderFrequency} onChange={e => setReminderFrequency(e.target.value)}>{REMINDER_FREQUENCIES.map(frequency => <option key={frequency}>{frequency}</option>)}</select></label>{reminderError && <small role="alert">{reminderError}</small>}<button className="primary" onClick={addReminder}>บันทึกการแจ้งเตือน</button><button className="text-button" onClick={() => setReminderFormOpen(false)}>ยกเลิก</button></section>}</>}
+    {structuredReminderFormOpen && <ReminderForm onSave={saveStructuredReminder} onCancel={() => setStructuredReminderFormOpen(false)} />}
     {page === 'settings' && settingsSurface}
     <nav className="bottom-nav">{navItems.filter(([key]) => key !== 'reminders').map(([key, icon, label]) => <button aria-label={label} className={page === key ? 'active' : ''} key={key} onClick={() => navigateMainPage(key)}><span aria-hidden="true">{icon}</span>{label}</button>)}</nav>
   </main>
