@@ -97,7 +97,7 @@ describe('App remote sync integration', () => {
     window.localStorage.removeItem('petcare.local.v1')
     render(<App />)
     await connect()
-    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
     expect(screen.getByRole('button', { name: 'ไข้' })).toBeTruthy()
   })

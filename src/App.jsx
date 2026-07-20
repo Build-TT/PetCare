@@ -406,26 +406,31 @@ function App({ initialPage = 'home' }) {
   }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady])
 
   const handleGoogleConnected = async (connection) => {
+    if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
     setRemoteReady(false)
     try {
       const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId)
-      const outbox = loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null)
-      const pendingState = unwrapPendingState(outbox)
-      const fallback = { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, ...(pendingState || {}) }
+      const isNewSheet = connection.created === true
+      const outbox = isNewSheet ? null : loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null)
+      const pendingState = isNewSheet ? null : unwrapPendingState(outbox)
+      const fallback = isNewSheet
+        ? { tracks: [], logs: [], activities: [], reminders: [], symptoms: [], pets: defaultPets, treatmentHistory: [], lineRecipients: [], activePetId: defaultPets[0].id }
+        : { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, ...(pendingState || {}) }
       const hydrated = hydrateRemoteState(remote, fallback, pendingState)
       setTracks(hydrated.tracks)
       setLogs(hydrated.logs)
       setActivities(hydrated.activities ?? [])
       setReminders(hydrated.reminders)
       setSymptoms(hydrated.symptoms ?? defaultSymptoms)
-      setPets(hydrated.pets?.length ? hydrated.pets : pets)
+      setPets(hydrated.pets?.length ? hydrated.pets : (isNewSheet ? defaultPets : pets))
       setTreatmentHistory(hydrated.treatmentHistory ?? [])
       setLineRecipients(hydrated.lineRecipients ?? [])
-      setActivePetId(hydrated.activePetId || activePetId)
+      setActivePetId(hydrated.activePetId || (isNewSheet ? defaultPets[0].id : activePetId))
       setGoogleConnection(connection)
       setRemoteReady(true)
       window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
       setShowGoogleOnboarding(false)
+      if (isNewSheet) window.localStorage.removeItem(REMOTE_OUTBOX_KEY)
       for (const recipient of hydrated.lineRecipients ?? []) {
         await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipient.recipient_id })
       }
