@@ -1,6 +1,6 @@
 import GoogleSheetConnection from './GoogleSheetConnection.jsx'
 
-export default function GoogleDriveOnboarding({ onConnected }) {
+export default function GoogleDriveOnboarding({ onConnected, onBusyChange }) {
   return <div className="google-onboarding-backdrop">
     <section className="google-onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="google-onboarding-title" aria-describedby="google-onboarding-description">
       <div className="google-onboarding-mark" aria-hidden="true">G</div>
@@ -12,7 +12,7 @@ export default function GoogleDriveOnboarding({ onConnected }) {
         <li>เปิดดูและใช้งานต่อได้จากอุปกรณ์อื่น</li>
         <li>PetCare จะไม่เก็บรหัสผ่าน Google ของคุณ</li>
       </ul>
-      <GoogleSheetConnection ariaLabel="Google Drive onboarding connection" initialConsentAccepted showConsent={false} buttonLabel="เริ่มเชื่อม Google Drive" onConnected={onConnected} />
+      <GoogleSheetConnection ariaLabel="Google Drive onboarding connection" initialConsentAccepted showConsent={false} buttonLabel="เริ่มเชื่อม Google Drive" onConnected={onConnected} onBusyChange={onBusyChange} />
     </section>
   </div>
 }

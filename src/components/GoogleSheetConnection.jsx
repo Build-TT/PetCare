@@ -5,7 +5,7 @@ import '../googleSheetConnection.css'
 
 const CONNECTION_META_KEY = 'petcare.google-sheet.v1'
 
-export default function GoogleSheetConnection({ onConnected, onProvisionLine, lineUserId = '', connection: connectedConnection = null, syncStatus = 'idle', syncError = '', externalError = '', ariaLabel = 'Google Sheet connection', initialConsentAccepted = false, showConsent = true, buttonLabel = 'เชื่อมต่อ Google' }) {
+export default function GoogleSheetConnection({ onConnected, onProvisionLine, onBusyChange, lineUserId = '', connection: connectedConnection = null, syncStatus = 'idle', syncError = '', externalError = '', ariaLabel = 'Google Sheet connection', initialConsentAccepted = false, showConsent = true, buttonLabel = 'เชื่อมต่อ Google' }) {
   const [connection, setConnection] = useState(connectedConnection)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -19,6 +19,11 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, li
       setConsentAccepted(true)
     }
   }, [connectedConnection])
+
+  useEffect(() => {
+    onBusyChange?.(busy)
+    return () => onBusyChange?.(false)
+  }, [busy, onBusyChange])
 
   const getAccessAndProfile = async () => {
     const existingAccessToken = connection?.accessToken || connectedConnection?.accessToken

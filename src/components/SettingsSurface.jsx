@@ -24,6 +24,7 @@ export default function SettingsSurface({
   symptomForm,
   googleProps,
   onOpenReminders,
+  onLogout,
 }) {
   const back = () => onSectionChange('')
 
@@ -35,6 +36,7 @@ export default function SettingsSurface({
       <button className="setting setting-action" onClick={() => onOpenReminders()}><b>การแจ้งเตือน</b><small>{reminders.filter(item => item.enabled !== false).length} รายการที่เปิดใช้งาน</small></button>
       <button className="setting setting-action" onClick={() => onSectionChange('members')}><b>ผู้ใช้งาน PetCare</b><small>เพิ่มผู้ใช้และกำหนดสิทธิ์การเข้าถึงข้อมูล</small></button>
       <button className="setting setting-action" onClick={() => onSectionChange('google')}><b>Google Sheet</b><small>เชื่อมต่อและจัดการการซิงก์ข้อมูล</small></button>
+      {onLogout && <button className="setting setting-action settings-logout" type="button" onClick={onLogout}><b>ออกจากระบบ</b><small>ออกจากบัญชี PetCare บนอุปกรณ์นี้</small></button>}
     </section>
   }
 

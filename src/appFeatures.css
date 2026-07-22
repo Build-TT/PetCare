@@ -440,8 +440,22 @@ h2 { color: var(--pet-ink); font-size: 17px; }
 .setting-google { display: grid; gap: 10px; margin-top: 10px; padding: 14px; border: 1.5px solid var(--pet-line); border-radius: 14px; background: var(--pet-paper); }
 .setting-google .google-consent { display: flex; align-items: flex-start; gap: 8px; color: var(--pet-muted); font-size: 12px; }
 .setting-google .google-consent input { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; accent-color: var(--pet-coral); }
+.google-connecting-overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: rgb(37 29 25 / 42%); cursor: wait; }
+.google-connecting-card { width: min(100%, 330px); display: grid; gap: 8px; padding: 20px; border-radius: 16px; background: var(--pet-paper); box-shadow: 0 12px 30px rgb(37 29 25 / 20%); text-align: center; }
+.google-connecting-card .sheet-profile-skeleton { justify-content: center; }
+.google-connecting-card small { color: var(--pet-muted); }
+.install-app-prompt { position: fixed; left: 50%; bottom: 94px; z-index: 30; width: min(calc(100% - 24px), 406px); transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--pet-line); border-radius: 14px; background: var(--pet-paper); box-shadow: 0 8px 20px rgb(37 29 25 / 14%); }
+.install-app-icon { width: 42px; height: 42px; flex: 0 0 42px; overflow: hidden; border-radius: 11px; background: var(--pet-mint); }
+.install-app-icon img { width: 100%; height: 100%; object-fit: cover; }
+.install-app-prompt div { flex: 1; display: grid; gap: 2px; }
+.install-app-prompt small { color: var(--pet-muted); font-size: 11px; }
+.install-app-prompt .primary { width: auto; height: 38px; padding: 0 14px; font-size: 13px; }
+.install-dismiss { border: 0; background: none; color: var(--pet-muted); font-size: 20px; }
+@media (prefers-reduced-motion: reduce) { .sheet-profile-skeleton > span, .sheet-profile-skeleton i { animation: none; } }
 .setting-action { min-height: 62px; margin: 0; border: 1.5px solid var(--pet-line); border-radius: 14px; background: var(--pet-paper); }
 .setting-action:hover, .setting-action:focus-visible { background: var(--pet-lilac); border-color: var(--pet-ink); }
+.settings-logout { color: var(--pet-coral); }
+.settings-logout b { color: var(--pet-coral); }
 .setting-action::after { color: var(--pet-coral); font-size: 26px; }
 .settings-reminder-link { margin: 0 0 12px; }
 .settings-actions > .setting-action,
