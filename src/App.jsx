@@ -263,7 +263,10 @@ function App({ initialPage = 'home' }) {
   const [selectedSymptoms, setSelectedSymptoms] = useState([])
   const [note, setNote] = useState('')
   const [datetime, setDatetime] = useState(nowLocal())
-  const [googleConnection, setGoogleConnection] = useState(null)
+  // Keep non-secret Sheet metadata visible immediately after a refresh. The
+  // OAuth token is deliberately not persisted; restoreGoogleConnection fills
+  // it back in silently when Google's browser session is still valid.
+  const [googleConnection, setGoogleConnection] = useState(rememberedGoogleSheet ? { ...rememberedGoogleSheet } : null)
   const [showGoogleOnboarding, setShowGoogleOnboarding] = useState(!hasCompletedGoogleOnboarding)
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState('idle')
@@ -752,7 +755,7 @@ function App({ initialPage = 'home' }) {
     let cancelled = false
     const restoreGoogleConnection = async () => {
       try {
-        const accessToken = await requestGoogleAccessToken()
+        const accessToken = await requestGoogleAccessToken({ prompt: 'none' })
         const profile = await getGoogleUserProfile(accessToken)
         if (cancelled) return
         const connection = {
@@ -763,9 +766,13 @@ function App({ initialPage = 'home' }) {
         await handleGoogleConnected(connection)
       } catch (error) {
         if (cancelled) return
-        setGoogleConnection(null)
+        // Do not discard the remembered Sheet on a transient/expired OAuth
+        // token. Local data remains usable and the user can reconnect from
+        // Settings; dropping this state used to make every pull-to-refresh
+        // look like the Sheet had been disconnected.
+        setGoogleConnection(current => current || { ...rememberedGoogleSheet })
         setRemoteReady(false)
-        setShowGoogleOnboarding(true)
+        setShowGoogleOnboarding(false)
         setSyncStatus('error')
         setSyncError(error.message || 'กรุณาเชื่อมต่อ Google Sheet ใหม่')
       }

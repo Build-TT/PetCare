@@ -1,4 +1,5 @@
 import GoogleSheetConnection from './GoogleSheetConnection.jsx'
+import GoogleSheetMembers from './GoogleSheetMembers.jsx'
 import LineGroupSettings from './LineGroupSettings.jsx'
 
 export default function SettingsSurface({
@@ -32,6 +33,7 @@ export default function SettingsSurface({
       <button className="setting setting-action" onClick={() => onSectionChange('symptoms')}><b>จัดการอาการ</b></button>
       <button className="setting setting-action" onClick={() => onSectionChange('line')}><b>ผู้รับ LINE</b><small>{lineRecipients.length} ผู้รับ</small></button>
       <button className="setting setting-action" onClick={() => onOpenReminders()}><b>การแจ้งเตือน</b><small>{reminders.filter(item => item.enabled !== false).length} รายการที่เปิดใช้งาน</small></button>
+      <button className="setting setting-action" onClick={() => onSectionChange('members')}><b>ผู้ใช้งาน PetCare</b><small>เพิ่มผู้ใช้และกำหนดสิทธิ์การเข้าถึงข้อมูล</small></button>
       <button className="setting setting-action" onClick={() => onSectionChange('google')}><b>Google Sheet</b><small>เชื่อมต่อและจัดการการซิงก์ข้อมูล</small></button>
     </section>
   }
@@ -40,6 +42,18 @@ export default function SettingsSurface({
     return <section className="settings-detail" aria-label="Google Sheet">
       <button className="text-button settings-back" onClick={back}>← กลับเมนูตั้งค่า</button>
       <GoogleSheetConnection {...googleProps} lineUserId={lineUserId} onProvisionLine={onProvisionLine} />
+      {googleProps?.connection && <GoogleSheetMembers connection={googleProps.connection} />}
+    </section>
+  }
+
+  if (section === 'members') {
+    return <section className="settings-detail" aria-label="ผู้ใช้งาน PetCare">
+      <button className="text-button settings-back" onClick={back}>← กลับเมนูตั้งค่า</button>
+      <section className="settings-panel">
+        <h2>ผู้ใช้งาน PetCare</h2>
+        <small>จัดการจากใน PetCare ได้เลย ผู้ใช้ที่เพิ่มจะได้รับอีเมลเชิญจาก Google และใช้บัญชี Google เปิดข้อมูลชุดเดียวกัน</small>
+      </section>
+      <GoogleSheetMembers connection={googleProps?.connection} />
     </section>
   }
 

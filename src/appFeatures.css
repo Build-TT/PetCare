@@ -542,6 +542,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 
 .line-group-settings { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--pet-line); }
+.sheet-members { margin-top: 0; }
+.settings-panel > h2 { margin: 0 0 4px; }
+.settings-panel > h2 + small { display: block; color: var(--pet-muted); line-height: 1.5; }
+.sheet-members h3 { margin: 0; font-size: 16px; }
+.member-invite { display: grid; gap: 4px; }
+.member-invite .primary { width: 100%; margin-top: 2px; }
+.member-list { display: grid; gap: 0; margin-top: 10px; border-top: 1px solid var(--pet-line); }
+.member-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 52px; padding: 6px 0; border-bottom: 1px solid var(--pet-line); }
+.member-row span { min-width: 0; }
+.member-row b, .member-row small { display: block; overflow-wrap: anywhere; }
+.member-row small { color: var(--pet-muted); font-size: 11px; }
+.sheet-members > small[role="status"], .sheet-members > small[role="alert"] { display: block; margin-top: 7px; }
 .line-group-heading { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
 .line-group-heading h2 { margin: 0 0 2px; }
 .line-group-heading small { color: var(--pet-muted); font-size: 12px; }

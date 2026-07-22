@@ -36,7 +36,7 @@ export function loadGoogleIdentityServices() {
   return gisLoader
 }
 
-export async function requestGoogleAccessToken() {
+export async function requestGoogleAccessToken({ prompt = '' } = {}) {
   if (!isGoogleConfigured()) throw new Error('ยังไม่ได้ตั้งค่า VITE_GOOGLE_CLIENT_ID')
   const google = await loadGoogleIdentityServices()
   return new Promise((resolve, reject) => {
@@ -58,7 +58,11 @@ export async function requestGoogleAccessToken() {
       },
     })
     try {
-      tokenClient.requestAccessToken({ prompt: '' })
+      // An existing Google session can usually be restored without showing a
+      // consent dialog after a normal browser refresh.  GIS will still call
+      // the callback with an error when the session has expired; callers can
+      // then ask the user to reconnect explicitly.
+      tokenClient.requestAccessToken({ prompt })
     } catch (error) {
       pendingTokenRequest = undefined
       reject(error)
