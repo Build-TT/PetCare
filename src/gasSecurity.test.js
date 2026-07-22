@@ -32,6 +32,27 @@ function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = '
 const response = (code, body) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(body) })
 
 describe('GAS security behavior', () => {
+  it('turns an invited Google email into a real PetCare account with Sheet access', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: {
+        PETCARE_ACCOUNT_USERS: JSON.stringify({
+          __invite__CODE123: { email: 'user@example.com', role: 'user', spreadsheet_id: 'sheet-shared', owner_email: 'owner@example.com' },
+        }),
+      },
+      fetchImpl: () => response(200, {}),
+    })
+    sandbox.accountToken = vi.fn(() => 'token123456789')
+    sandbox.verifyGoogleIdentity = vi.fn(() => ({ sub: 'google-user', email: 'user@example.com' }))
+
+    const session = sandbox.googleLoginAccount({ google_access_token: 'google-token' })
+
+    expect(session.status).toBe('ok')
+    expect(session.user.email).toBe('user@example.com')
+    expect(session.user.spreadsheet_id).toBe('sheet-shared')
+    expect(session.user.username).toMatch(/^google-/)
+    expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS')).not.toHaveProperty('__invite__CODE123')
+  })
+
   it('initializes the legacy migration backup alongside normalized sheets', () => {
     const { sandbox } = makeGasSandbox({ fetchImpl: () => response(200, {}) })
     expect(sandbox.SHEETS.app_state).toEqual(['key', 'value', 'updated_at'])

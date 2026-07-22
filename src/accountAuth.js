@@ -38,8 +38,12 @@ function rememberSession(session, rememberMe) {
 
 export async function registerAccount(input, rememberMe = true) { return rememberSession(await call('accountRegister', input), rememberMe) }
 export async function loginAccount(username, password, rememberMe = true) { return rememberSession(await call('accountLogin', { username, password }), rememberMe) }
+export async function loginGoogleAccount(accessToken, rememberMe = true) { return rememberSession(await call('accountGoogleLogin', { google_access_token: accessToken }), rememberMe) }
 export async function loadAccountState(sessionToken) { return (await call('accountReadState', { session_token: sessionToken })).state }
 export async function saveAccountState(sessionToken, state) { return call('accountSaveState', { session_token: sessionToken, state }) }
 export async function inviteAccountUser(accessToken, spreadsheetId, email, role = 'user') {
   return call('accountInvite', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, email, role })
+}
+export async function listAccountUsers(accessToken, spreadsheetId) {
+  return call('accountMembers', { google_access_token: accessToken, spreadsheet_id: spreadsheetId })
 }

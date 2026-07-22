@@ -1,14 +1,8 @@
 import { useEffect, useState } from 'react'
 
-const LINE_GROUP_META_KEY = 'petcare.line-group.v1'
-
-function storedGroup() {
-  try { return JSON.parse(window.localStorage.getItem(LINE_GROUP_META_KEY) || 'null') } catch { return null }
-}
-
 export default function LineGroupSettings({ connection, onSelected }) {
   const [groups, setGroups] = useState([])
-  const [selectedId, setSelectedId] = useState(storedGroup()?.groupId || '')
+  const [selectedId, setSelectedId] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -26,7 +20,6 @@ export default function LineGroupSettings({ connection, onSelected }) {
       const body = await response.json()
       if (!response.ok || body.status === 'error') throw new Error(body.message || 'โหลด LINE Group ไม่สำเร็จ')
       setGroups(body.groups || [])
-      if (body.selected_group_id) setSelectedId(body.selected_group_id)
     } catch (loadError) {
       setError(loadError.message || 'โหลด LINE Group ไม่สำเร็จ')
     } finally {
@@ -59,7 +52,6 @@ export default function LineGroupSettings({ connection, onSelected }) {
         groupId: body.selected_group_id,
         groupName: selected?.group_name || 'LINE Group',
       }
-      window.localStorage.setItem(LINE_GROUP_META_KEY, JSON.stringify(metadata))
       setGroups(body.groups || [])
       setSelectedId(body.selected_group_id)
       onSelected?.(metadata)

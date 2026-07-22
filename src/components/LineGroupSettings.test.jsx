@@ -8,11 +8,12 @@ describe('LINE group settings', () => {
     window.localStorage.clear()
   })
 
-  it('loads groups and remembers the selected reminder recipient', async () => {
+  it('loads groups and requires a fresh selection when the settings screen opens', async () => {
     const groups = [
       { group_id: 'C111111', group_name: 'บ้านโมจิ', picture_url: '' },
       { group_id: 'C222222', group_name: 'ทีมคุณหมอ', picture_url: '' },
     ]
+    window.localStorage.setItem('petcare.line-group.v1', JSON.stringify({ groupId: 'C111111', groupName: 'บ้านโมจิ' }))
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ok', groups, selected_group_id: 'C111111' }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ok', groups, selected_group_id: 'C222222' }) })
@@ -22,11 +23,12 @@ describe('LINE group settings', () => {
     render(<LineGroupSettings connection={{ accessToken: 'google-token' }} onSelected={onSelected} />)
 
     await screen.findByText('บ้านโมจิ')
+    expect(screen.getByRole('radio', { name: /บ้านโมจิ/ }).checked).toBe(false)
     fireEvent.click(screen.getByRole('radio', { name: /ทีมคุณหมอ/ }))
     fireEvent.click(screen.getByRole('button', { name: 'ใช้กลุ่มนี้รับการแจ้งเตือน' }))
 
     await waitFor(() => expect(onSelected).toHaveBeenCalledWith({ groupId: 'C222222', groupName: 'ทีมคุณหมอ' }))
-    expect(JSON.parse(window.localStorage.getItem('petcare.line-group.v1'))).toEqual({ groupId: 'C222222', groupName: 'ทีมคุณหมอ' })
+    expect(window.localStorage.getItem('petcare.line-group.v1')).toContain('C111111')
     expect(fetchMock.mock.calls[1][1]).toMatchObject({
       method: 'POST',
       headers: {

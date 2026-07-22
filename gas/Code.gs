@@ -256,7 +256,7 @@ function accountStore(key) {
 function saveAccountStore(key, value) { PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(value)) }
 function accountHash(password, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(salt) + ':' + String(password))) }
 function accountToken() { return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '') }
-function accountPublic(user) { return { username: user.username, email: user.email || '', name: user.name || '', surname: user.surname || '', role: user.role || 'user', spreadsheet_id: user.spreadsheet_id || '' } }
+function accountPublic(user) { return { username: user.username, email: user.email || '', name: user.name || '', surname: user.surname || '', role: user.role || 'user', spreadsheet_id: user.spreadsheet_id || '', status: user.status || 'active' } }
 function accountUsername(value) {
   var username = String(value || '').trim().toLowerCase()
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new Error('Username ต้องมี 3-40 ตัว และใช้ a-z, 0-9, จุด, ขีดกลาง หรือขีดล่าง')
@@ -295,15 +295,62 @@ function loginAccount(p) {
   if (!user || user.active === false || accountHash(String(p.password || ''), user.salt) !== user.password_hash) throw new Error('Username หรือ Password ไม่ถูกต้อง')
   return newAccountSession(user)
 }
+function googleAccountUsername(users) {
+  var username = 'google-' + accountToken().slice(0, 12).toLowerCase()
+  while (users[username]) username = 'google-' + accountToken().slice(0, 12).toLowerCase()
+  return username
+}
+function googleLoginAccount(p) {
+  var google = verifyGoogleIdentity(p.google_access_token), users = accountStore(ACCOUNT_USERS_PROPERTY), user = null, key = ''
+  Object.keys(users).some(function (candidate) {
+    if (candidate.indexOf('__invite__') === 0) return false
+    if (String(users[candidate].email || '').toLowerCase() === google.email) { key = candidate; user = users[candidate]; return true }
+    return false
+  })
+  if (!user) {
+    Object.keys(users).some(function (candidate) {
+      var invite = users[candidate]
+      if (candidate.indexOf('__invite__') === 0 && String(invite.email || '').toLowerCase() === google.email) {
+        key = googleAccountUsername(users)
+        user = { username: key, email: google.email, name: '', surname: '', role: invite.role || 'user', spreadsheet_id: invite.spreadsheet_id || '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
+        delete users[candidate]
+        return true
+      }
+      return false
+    })
+  }
+  if (!user) {
+    key = googleAccountUsername(users)
+    user = { username: key, email: google.email, name: '', surname: '', role: 'user', spreadsheet_id: '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
+  }
+  user.google_sub = google.sub
+  users[key] = user
+  saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  return newAccountSession(user)
+}
 function inviteAccount(p, google) {
   var spreadsheetId = String(p.spreadsheet_id || '').trim()
   if (!spreadsheetId) throw new Error('Google Sheet ID is required')
   var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email)
   setupSheets(file.id)
   var users = accountStore(ACCOUNT_USERS_PROPERTY), code = accountToken().slice(0, 12).toUpperCase()
-  users['__invite__' + code] = { email: String(p.email || '').trim().toLowerCase(), role: String(p.role || 'user'), spreadsheet_id: file.id, created_at: nowIso() }
+  users['__invite__' + code] = { email: String(p.email || '').trim().toLowerCase(), role: String(p.role || 'user'), spreadsheet_id: file.id, owner_email: google.email, created_at: nowIso() }
   saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
   return { status: 'ok', invite_code: code, spreadsheet_id: file.id }
+}
+function accountMembers(p, google) {
+  var spreadsheetId = String(p.spreadsheet_id || '').trim()
+  if (!spreadsheetId) throw new Error('Google Sheet ID is required')
+  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email), users = accountStore(ACCOUNT_USERS_PROPERTY), members = []
+  Object.keys(users).forEach(function (key) {
+    var user = users[key]
+    if (key.indexOf('__invite__') === 0) {
+      if (String(user.spreadsheet_id || '') === file.id && String(user.owner_email || '').toLowerCase() === google.email) members.push({ email: user.email || '', role: user.role || 'user', spreadsheet_id: file.id, status: 'pending' })
+      return
+    }
+    if (String(user.spreadsheet_id || '') === file.id) members.push(accountPublic(user))
+  })
+  return { status: 'ok', members: members }
 }
 function accountStateSheet() {
   if (!CURRENT_ACCOUNT_USER.spreadsheet_id) throw new Error('บัญชีนี้ยังไม่ได้รับสิทธิ์ Google Sheet')
@@ -355,6 +402,8 @@ function doPost(e) {
     if (p.action === 'accountRegister') return json(registerAccount(p))
     if (p.action === 'accountLogin') return json(loginAccount(p))
     if (p.action === 'accountInvite') return json(inviteAccount(p, verifyGoogleIdentity(p.google_access_token)))
+    if (p.action === 'accountGoogleLogin') return json(googleLoginAccount(p))
+    if (p.action === 'accountMembers') return json(accountMembers(p, verifyGoogleIdentity(p.google_access_token)))
     if (p.action === 'accountReadState' || p.action === 'accountSaveState') {
       verifyAccountSession(p.session_token)
       return json(p.action === 'accountReadState' ? accountReadState() : accountSaveState(p.state))

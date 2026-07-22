@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { grantSheetAccess, listSheetPermissions, revokeSheetAccess } from '../googleDrivePermissions.js'
-import { inviteAccountUser } from '../accountAuth.js'
+import { inviteAccountUser, listAccountUsers } from '../accountAuth.js'
 
 export default function GoogleSheetMembers({ connection }) {
   const [members, setMembers] = useState([])
@@ -11,11 +11,19 @@ export default function GoogleSheetMembers({ connection }) {
   const [error, setError] = useState('')
   const [accountEmail, setAccountEmail] = useState('')
   const [inviteCode, setInviteCode] = useState('')
+  const [accountMembers, setAccountMembers] = useState([])
 
   const refresh = async () => {
     if (!connection?.accessToken || !connection?.spreadsheetId) return
     setBusy(true); setError('')
-    try { setMembers(await listSheetPermissions(connection.accessToken, connection.spreadsheetId)) }
+    try {
+      const [permissions, accounts] = await Promise.all([
+        listSheetPermissions(connection.accessToken, connection.spreadsheetId),
+        listAccountUsers(connection.accessToken, connection.spreadsheetId).catch(() => ({ members: [] })),
+      ])
+      setMembers(permissions)
+      setAccountMembers(accounts.members || [])
+    }
     catch (loadError) { setError(loadError.message || 'โหลดรายชื่อผู้ใช้ไม่สำเร็จ') }
     finally { setBusy(false) }
   }
@@ -45,6 +53,7 @@ export default function GoogleSheetMembers({ connection }) {
     try {
       const result = await inviteAccountUser(connection.accessToken, connection.spreadsheetId, accountEmail, 'user')
       setAccountEmail(''); setInviteCode(result.invite_code); setMessage('สร้างคำเชิญแล้ว ส่ง Invite code ให้ผู้ใช้สมัครบัญชี PetCare')
+      await refresh()
     } catch (inviteError) { setError(inviteError.message || 'สร้างคำเชิญไม่สำเร็จ') }
     finally { setBusy(false) }
   }
@@ -65,6 +74,7 @@ export default function GoogleSheetMembers({ connection }) {
     </form>
     {message && <small role="status">{message}</small>}
     {error && <small role="alert" className="danger">{error}</small>}
+    <div className="member-list petcare-member-list"><b>บัญชี PetCare ที่ได้รับสิทธิ์</b>{accountMembers.length === 0 && <small>ยังไม่มีบัญชีที่ลงทะเบียนกับ Sheet นี้</small>}{accountMembers.map(member => <div className="member-row" key={member.username || member.email}><span><b>{member.email || member.username}</b><small>{member.status === 'pending' ? 'รอผู้ใช้สมัคร/เข้าสู่ระบบ' : 'ใช้งานได้'}</small></span></div>)}</div>
     <div className="member-list">{members.filter(member => member.type === 'user').map(member => <div className="member-row" key={member.id}><span><b>{member.emailAddress || member.displayName || 'Google user'}</b><small>{member.role === 'writer' ? 'แก้ไขได้' : member.role === 'owner' ? 'เจ้าของ' : 'ดูได้'}</small></span>{member.role !== 'owner' && <button className="text-button danger" type="button" onClick={() => remove(member)} disabled={busy}>ลบสิทธิ์</button>}</div>)}</div>
   </section>
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { loginAccount, registerAccount, saveAccountSession } from '../accountAuth.js'
-import { getGoogleUserProfile, isGoogleConfigured, loadGoogleIdentityServices, requestGoogleAccessToken } from '../googleAuth.js'
+import { loginAccount, loginGoogleAccount, registerAccount } from '../accountAuth.js'
+import { isGoogleConfigured, loadGoogleIdentityServices, requestGoogleAccessToken } from '../googleAuth.js'
 import '../accountGate.css'
 
 export default function AccountGate({ onAuthenticated }) {
@@ -30,9 +30,7 @@ export default function AccountGate({ onAuthenticated }) {
     setGoogleBusy(true); setError('')
     try {
       const accessToken = await requestGoogleAccessToken()
-      const profile = await getGoogleUserProfile(accessToken)
-      const session = { status: 'ok', session_token: 'google-session', user: { email: profile.email, name: profile.name || '', surname: '', role: 'user', spreadsheet_id: '' } }
-      saveAccountSession(session, rememberMe ? window.localStorage : window.sessionStorage)
+      const session = await loginGoogleAccount(accessToken, rememberMe)
       onAuthenticated(session)
     } catch (loginError) { setError(loginError.message || 'Google Login ไม่สำเร็จ') }
     finally { setGoogleBusy(false) }

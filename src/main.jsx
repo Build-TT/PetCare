@@ -31,7 +31,7 @@ function MainApp({ initialPage }) {
   const [session, setSession] = React.useState(() => getAccountSession())
   return <><InstallAppPrompt />{!session?.session_token
     ? <AccountGate onAuthenticated={setSession} />
-    : <App initialPage={initialPage} accountSession={session} onLogout={() => { clearAccountSession(); window.localStorage.removeItem('petcare.google-sheet.v1'); window.location.reload() }} />}</>
+    : <App initialPage={initialPage} accountSession={session} onLogout={() => { clearAccountSession(); window.location.reload() }} />}</>
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
