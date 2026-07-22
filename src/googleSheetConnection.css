@@ -5,3 +5,16 @@
 .setting-google small[role="alert"] { display: block; margin-top: 5px }
 .google-consent { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; color: #7a5947; font-size: 12px; line-height: 1.4 }
 .google-consent input { margin-top: 2px }
+.setting-google.is-busy { pointer-events: none; opacity: .82 }
+.sheet-profile-skeleton { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.sheet-profile-skeleton > span, .sheet-profile-skeleton i { display: block; background: linear-gradient(90deg, #eadfd8 25%, #f8f1ec 50%, #eadfd8 75%); background-size: 200% 100%; animation: petcare-shimmer 1.2s infinite; }
+.sheet-profile-skeleton > span { width: 40px; height: 40px; border-radius: 50%; }
+.sheet-profile-skeleton > div { display: grid; gap: 6px; }
+.sheet-profile-skeleton i { width: 150px; height: 9px; border-radius: 6px; }
+.sheet-profile-skeleton i:last-child { width: 100px; }
+.google-sheet-picker { display: grid; gap: 6px; margin: 8px 0; }
+.google-sheet-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; padding: 9px 10px; border: 1px solid #eadfd8; border-radius: 10px; background: #fffaf7; cursor: pointer; }
+.google-sheet-option span { display: grid; gap: 3px; }
+.google-sheet-option small { color: #8a7467; }
+.google-sheet-option strong { color: #c9634e; white-space: nowrap; }
+@keyframes petcare-shimmer { to { background-position: -200% 0; } }

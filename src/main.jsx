@@ -8,7 +8,7 @@ import ManageTypes from './liff/ManageTypes.jsx'
 import PetDetail from './pages/PetDetail.jsx'
 import { parseRoute } from './routes.js'
 import AccountGate from './components/AccountGate.jsx'
-import { getAccountSession } from './accountAuth.js'
+import { clearAccountSession, getAccountSession } from './accountAuth.js'
 import './index.css'
 
 export { MAIN_APP_PAGES, parseRoute as resolveRoute } from './routes.js'
@@ -28,7 +28,7 @@ export function Router() {
 function MainApp({ initialPage }) {
   const [session, setSession] = React.useState(() => getAccountSession())
   if (!session?.session_token) return <AccountGate onAuthenticated={setSession} />
-  return <App initialPage={initialPage} accountSession={session} />
+  return <App initialPage={initialPage} accountSession={session} onLogout={() => { clearAccountSession(); window.localStorage.removeItem('petcare.google-sheet.v1'); window.location.reload() }} />
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -38,3 +38,5 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </div>
   </React.StrictMode>
 )
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))

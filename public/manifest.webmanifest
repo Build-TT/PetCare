@@ -1,0 +1,13 @@
+{
+  "name": "PetCare",
+  "short_name": "PetCare",
+  "description": "ดูแลสุขภาพและบันทึกข้อมูลสัตว์เลี้ยง",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fffaf7",
+  "theme_color": "#16a34a",
+  "icons": [
+    { "src": "/assets/pets/pomeranian-male-tie.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/assets/pets/pomeranian-male-tie.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

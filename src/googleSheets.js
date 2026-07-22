@@ -38,6 +38,18 @@ export function buildPetCareSheetTitle(email) {
   return `PetCare - ${String(email).trim()}`
 }
 
+export async function listPetCareSheets(accessToken) {
+  const query = encodeURIComponent("mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and name contains 'PetCare'")
+  const fields = encodeURIComponent('files(id,name,webViewLink,modifiedTime)')
+  const data = await apiFetch(`${DRIVE_API}/files?q=${query}&spaces=drive&orderBy=modifiedTime%20desc&pageSize=100&fields=${fields}`, { headers: authHeaders(accessToken) })
+  return (data.files || []).map(file => ({
+    spreadsheetId: file.id,
+    spreadsheetUrl: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
+    name: file.name,
+    modifiedTime: file.modifiedTime || '',
+  }))
+}
+
 export function encodeAppState(state) {
   return {
     key: 'ui_state',

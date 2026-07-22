@@ -277,7 +277,8 @@ function newAccountSession(user) {
   return { status: 'ok', session_token: token, expires_at: sessions[token].expires_at, user: accountPublic(user) }
 }
 function registerAccount(p) {
-  var username = accountUsername(p.username), password = String(p.password || '')
+  var username = accountUsername(p.username), password = String(p.password || ''), email = String(p.email || '').trim().toLowerCase()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Email is required and must be valid')
   if (password.length < 8) throw new Error('Password ต้องมีอย่างน้อย 8 ตัวอักษร')
   if (!String(p.name || '').trim() || !String(p.surname || '').trim()) throw new Error('กรุณากรอกชื่อและนามสกุล')
   var users = accountStore(ACCOUNT_USERS_PROPERTY)
