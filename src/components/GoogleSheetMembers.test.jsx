@@ -29,6 +29,37 @@ describe('Google Sheet member management', () => {
     expect(screen.getAllByRole('status').some(node => node.textContent.includes('CODE123'))).toBe(true)
   })
 
+  it('confirms that an existing account was linked and emailed', async () => {
+    drive.listSheetPermissions.mockResolvedValue([])
+    drive.grantSheetAccess.mockResolvedValue({ id: 'permission-1' })
+    accounts.listAccountUsers.mockResolvedValue({ members: [] })
+    accounts.inviteAccountUser.mockResolvedValue({ existing_account: true, email_sent: true, role: 'reader' })
+    render(<GoogleSheetMembers connection={{ accessToken: 'google-token', spreadsheetId: 'sheet-1' }} />)
+
+    const input = screen.getByPlaceholderText('user@example.com')
+    fireEvent.change(input, { target: { value: 'user@example.com' } })
+    fireEvent.submit(input.closest('form'))
+
+    await waitFor(() => expect(screen.getByText('ผูกบัญชี PetCare กับ Sheet และส่งอีเมลแจ้งสิทธิ์แล้ว (reader)')).toBeTruthy())
+    expect(screen.queryByText(/Invite code:/)).toBeNull()
+  })
+
+  it('explains an existing-account email failure without referring to an invite code', async () => {
+    drive.listSheetPermissions.mockResolvedValue([])
+    drive.grantSheetAccess.mockResolvedValue({ id: 'permission-1' })
+    accounts.listAccountUsers.mockResolvedValue({ members: [] })
+    accounts.inviteAccountUser.mockResolvedValue({ existing_account: true, email_sent: false, role: 'writer', email_error: 'mail quota exceeded' })
+    render(<GoogleSheetMembers connection={{ accessToken: 'google-token', spreadsheetId: 'sheet-1' }} />)
+
+    const input = screen.getByPlaceholderText('user@example.com')
+    fireEvent.change(input, { target: { value: 'user@example.com' } })
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'writer' } })
+    fireEvent.submit(input.closest('form'))
+
+    await waitFor(() => expect(screen.getByText('ผูกบัญชี PetCare กับ Sheet แล้ว แต่ส่งอีเมลไม่สำเร็จ กรุณาแจ้งผู้ใช้ให้เข้าสู่ระบบด้วย Google อีเมลนี้ (writer)')).toBeTruthy())
+    expect(document.body.textContent).not.toContain('Invite code')
+  })
+
   it('treats a stale Google permission as already revoked and removes it locally', async () => {
     drive.listSheetPermissions
       .mockResolvedValueOnce([{ id: 'permission-1', type: 'user', emailAddress: 'user@example.com', role: 'reader' }])

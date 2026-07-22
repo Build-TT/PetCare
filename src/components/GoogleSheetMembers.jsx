@@ -45,7 +45,9 @@ export default function GoogleSheetMembers({ connection }) {
       const result = await inviteAccountUser(connection.accessToken, connection.spreadsheetId, email, role)
       setEmail(''); setInviteCode(result.invite_code || '');
       setMessage(result.existing_account
-        ? `ผูกบัญชี PetCare ที่มีอยู่กับ Sheet แล้ว (${result.role || role})`
+        ? result.email_sent
+          ? `ผูกบัญชี PetCare กับ Sheet และส่งอีเมลแจ้งสิทธิ์แล้ว (${result.role || role})`
+          : `ผูกบัญชี PetCare กับ Sheet แล้ว แต่ส่งอีเมลไม่สำเร็จ กรุณาแจ้งผู้ใช้ให้เข้าสู่ระบบด้วย Google อีเมลนี้ (${result.role || role})`
         : result.email_sent === false
         ? 'ให้สิทธิ์และผูกบัญชีแล้ว แต่ส่งอีเมลไม่สำเร็จ กรุณาส่ง Invite code ให้ผู้ใช้ด้วยตนเอง'
         : 'ให้สิทธิ์ Sheet และส่งคำเชิญ PetCare แล้ว')

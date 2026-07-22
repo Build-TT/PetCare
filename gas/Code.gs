@@ -374,6 +374,18 @@ function googleLoginAccountUnsafe(p) {
   return newAccountSession(user)
 }
 function googleLoginAccount(p) { return withAccountLock(function () { return googleLoginAccountUnsafe(p) }) }
+function sendPetCareEmail(email, subject, body, failureMessage, logPrefix) {
+  var emailSent = false, emailError = ''
+  try {
+    if (typeof MailApp === 'undefined') throw new Error('MailApp is unavailable')
+    MailApp.sendEmail(email, subject, body)
+    emailSent = true
+  } catch (err) {
+    emailError = failureMessage
+    Logger.log(logPrefix + ': ' + (err && err.message ? err.message : err))
+  }
+  return { email_sent: emailSent, email_error: emailError }
+}
 function inviteAccountUnsafe(p, google) {
   var spreadsheetId = String(p.spreadsheet_id || '').trim()
   if (!spreadsheetId) throw new Error('Google Sheet ID is required')
@@ -398,7 +410,11 @@ function inviteAccountUnsafe(p, google) {
   })
   if (existing) {
     saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
-    return { status: 'ok', spreadsheet_id: file.id, existing_account: true, role: accountRole(existing.role), email_sent: false, message: 'PetCare account already exists and is now linked to this Sheet' }
+    var existingRole = accountRole(existing.role)
+    var existingAppUrl = String(p.app_url || '').replace(/\/$/, '')
+    var existingBody = 'PetCare access has been granted to your account.\n\nEmail: ' + inviteEmail + '\nGoogle Sheet: ' + (file.name || file.id) + '\nRole: ' + existingRole + '\n\nOpen PetCare: ' + (existingAppUrl || 'the PetCare website') + '\n\nLogin with Google using this email. No invite code is required.'
+    var existingEmail = sendPetCareEmail(inviteEmail, 'PetCare access granted', existingBody, 'Access was granted, but the notification email could not be sent. The user can log in with Google using this email.', 'PetCare existing-account access email failed')
+    return { status: 'ok', spreadsheet_id: file.id, existing_account: true, role: existingRole, email_sent: existingEmail.email_sent, email_error: existingEmail.email_error, message: 'PetCare account already exists and is now linked to this Sheet' }
   }
   Object.keys(users).some(function (key) {
     var pending = users[key]
@@ -415,16 +431,8 @@ function inviteAccountUnsafe(p, google) {
   }
   var inviteUrl = String(p.app_url || '').replace(/\/$/, '')
   var body = 'You have been invited to PetCare.\n\nEmail: ' + inviteEmail + '\nInvite code: ' + code + '\n\nOpen PetCare: ' + (inviteUrl || 'the PetCare website') + '\n\nIf you use Google, choose Login with Google using this email. Otherwise choose Register and enter the Invite code.'
-  var emailSent = false, emailError = ''
-  try {
-    if (typeof MailApp === 'undefined') throw new Error('MailApp is unavailable')
-    MailApp.sendEmail(inviteEmail, 'PetCare invitation', body)
-    emailSent = true
-  } catch (err) {
-    emailError = 'Invitation email could not be sent; share the Invite code manually.'
-    Logger.log('PetCare invite email failed: ' + (err && err.message ? err.message : err))
-  }
-  return { status: 'ok', invite_code: code, spreadsheet_id: file.id, email_sent: emailSent, email_error: emailError }
+  var inviteEmailResult = sendPetCareEmail(inviteEmail, 'PetCare invitation', body, 'Invitation email could not be sent; share the Invite code manually.', 'PetCare invite email failed')
+  return { status: 'ok', invite_code: code, spreadsheet_id: file.id, email_sent: inviteEmailResult.email_sent, email_error: inviteEmailResult.email_error }
 }
 function inviteAccount(p, google) { return withAccountLock(function () { return inviteAccountUnsafe(p, google) }) }
 function accountMembers(p, google) {

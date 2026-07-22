@@ -83,6 +83,51 @@ describe('GAS security behavior', () => {
     expect(propertyWrites.filter(item => item.key === 'PETCARE_ACCOUNT_USERS')).toHaveLength(1)
   })
 
+  it('emails an existing Google-verified account after linking it without an invite code', () => {
+    const mailImpl = vi.fn()
+    const { sandbox } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ existing: { username: 'existing', email: 'user@example.com', active: true, spreadsheet_id: '', google_sub: 'google-user' } }) },
+      fetchImpl: () => response(200, {}),
+      mailImpl,
+    })
+    sandbox.setupSheets = vi.fn()
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Family pets' }))
+    sandbox.shareWithScriptIdentity = vi.fn()
+
+    const result = sandbox.inviteAccount({ spreadsheet_id: 'sheet-1', google_access_token: 'token', email: 'user@example.com', role: 'reader', app_url: 'https://petcare.example/' }, { email: 'owner@example.com', sub: 'owner' })
+
+    expect(result).toMatchObject({ existing_account: true, role: 'reader', email_sent: true, email_error: '' })
+    expect(result.invite_code).toBeUndefined()
+    expect(mailImpl).toHaveBeenCalledTimes(1)
+    const [recipient, subject, body] = mailImpl.mock.calls[0]
+    expect(recipient).toBe('user@example.com')
+    expect(subject).toBe('PetCare access granted')
+    expect(body).toContain('Family pets')
+    expect(body).toContain('Role: reader')
+    expect(body).toContain('https://petcare.example')
+    expect(body).toContain('Login with Google')
+    expect(body).not.toContain('Invite code:')
+  })
+
+  it('keeps an existing Google account linked and reports notification email failure', () => {
+    const { sandbox, logs } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ existing: { username: 'existing', email: 'user@example.com', active: true, spreadsheet_id: '', google_sub: 'google-user' } }) },
+      fetchImpl: () => response(200, {}),
+      mailImpl: () => { throw new Error('mail quota exceeded') },
+    })
+    sandbox.setupSheets = vi.fn()
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Family pets' }))
+    sandbox.shareWithScriptIdentity = vi.fn()
+
+    const result = sandbox.inviteAccount({ spreadsheet_id: 'sheet-1', google_access_token: 'token', email: 'user@example.com', role: 'writer', app_url: 'https://petcare.example' }, { email: 'owner@example.com', sub: 'owner' })
+
+    expect(result).toMatchObject({ existing_account: true, role: 'writer', email_sent: false })
+    expect(result.email_error).toContain('can log in with Google')
+    expect(result.invite_code).toBeUndefined()
+    expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS').existing.spreadsheet_id).toBe('sheet-1')
+    expect(logs.some(entry => String(entry).includes('PetCare existing-account access email failed: mail quota exceeded'))).toBe(true)
+  })
+
   it('does not bind an existing password account by email; it creates a deliberate pending invite', () => {
     const { sandbox } = makeGasSandbox({
       properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ existing: { username: 'existing', email: 'user@example.com', active: true, spreadsheet_id: '' } }) },
