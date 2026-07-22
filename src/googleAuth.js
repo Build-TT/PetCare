@@ -40,6 +40,7 @@ export async function requestGoogleAccessToken({ prompt = '' } = {}) {
   if (!isGoogleConfigured()) throw new Error('ยังไม่ได้ตั้งค่า VITE_GOOGLE_CLIENT_ID')
   const google = await loadGoogleIdentityServices()
   return new Promise((resolve, reject) => {
+    if (pendingTokenRequest) pendingTokenRequest.reject(new Error('Google authorization is already in progress'))
     pendingTokenRequest = { resolve, reject }
     tokenClient = tokenClient || google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
@@ -48,13 +49,13 @@ export async function requestGoogleAccessToken({ prompt = '' } = {}) {
         const pending = pendingTokenRequest
         pendingTokenRequest = undefined
         if (!pending) return
-        if (response?.error) pending.reject(new Error(response.error_description || response.error))
+        if (response?.error) pending.reject(new Error(response.error === 'popup_failed_to_open' ? 'เปิดหน้าต่าง Google ไม่ได้ กรุณาอนุญาต Popup สำหรับเว็บไซต์นี้แล้วลองใหม่' : response.error_description || response.error))
         else pending.resolve(response.access_token)
       },
       error_callback: (error) => {
         const pending = pendingTokenRequest
         pendingTokenRequest = undefined
-        pending?.reject(new Error(error?.type || 'Google authorization failed'))
+        pending?.reject(new Error(error?.type === 'popup_failed_to_open' ? 'เปิดหน้าต่าง Google ไม่ได้ กรุณาอนุญาต Popup สำหรับเว็บไซต์นี้แล้วลองใหม่' : error?.type || 'Google authorization failed'))
       },
     })
     try {

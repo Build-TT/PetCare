@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getGoogleUserProfile, isGoogleConfigured, requestGoogleAccessToken } from '../googleAuth.js'
+import { getGoogleUserProfile, isGoogleConfigured, loadGoogleIdentityServices, requestGoogleAccessToken } from '../googleAuth.js'
 import { createOrFindPetCareSheet, listPetCareSheets } from '../googleSheets.js'
 import '../googleSheetConnection.css'
 
@@ -11,7 +11,11 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
   const [error, setError] = useState('')
   const [consentAccepted, setConsentAccepted] = useState(initialConsentAccepted)
   const [sheets, setSheets] = useState([])
-  const [showSheets, setShowSheets] = useState(false)
+  const [showSheets, setShowSheets] = useState(!connectedConnection && !showConsent)
+
+  useEffect(() => {
+    if (isGoogleConfigured()) loadGoogleIdentityServices?.().catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     if (connectedConnection) {
@@ -52,6 +56,7 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
   const connect = async (createNew = false, selectedSpreadsheetId = '') => {
     const existingAccessToken = connection?.accessToken || connectedConnection?.accessToken
     if (!isGoogleConfigured() || (!consentAccepted && !existingAccessToken)) return
+    if (!createNew && !selectedSpreadsheetId) return loadSheets()
     setBusy(true)
     setError('')
     try {
@@ -77,7 +82,11 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
     {sheets.length ? sheets.map(sheet => <button key={sheet.spreadsheetId} type="button" className="google-sheet-option" onClick={() => connect(false, sheet.spreadsheetId)} disabled={busy}>
       <span><b>{sheet.name}</b><small>{sheet.modifiedTime ? new Date(sheet.modifiedTime).toLocaleDateString('th-TH') : 'Google Sheet'}</small></span><strong>ใช้ Sheet นี้</strong>
     </button>) : <small>ยังไม่พบ Sheet ที่ชื่อเกี่ยวกับ PetCare ใน Google Drive</small>}
+    {!connection && !showConsent && <button type="button" className="text-button" onClick={() => connect(true)} disabled={busy}>สร้าง Sheet ใหม่</button>}
   </div>
+
+  const primaryAction = showConsent ? () => connect(true) : loadSheets
+  const primaryLabel = showConsent ? 'เชื่อมต่อ Google (สร้างไฟล์ใหม่)' : buttonLabel
 
   if (!isGoogleConfigured()) return <section className="setting setting-google" aria-label={ariaLabel}><b>Google Sheet</b><small>ยังไม่ได้ตั้งค่า Google OAuth · Demo mode</small><button type="button" className="text-button" disabled>เชื่อมต่อ Google</button>{externalError && <small role="alert" className="danger">{externalError}</small>}</section>
 
@@ -90,11 +99,11 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
       <a href={connection.spreadsheetUrl} target="_blank" rel="noreferrer">เปิด Google Sheet</a>
       <button type="button" className="text-button" onClick={loadSheets} disabled={busy}>เลือก Sheet เดิม</button>
       {sheetPicker}
-      <button type="button" className="text-button" onClick={() => connect(true)} disabled={busy}>{busy ? 'กำลังเชื่อมต่อ…' : 'เริ่มใช้ Sheet ใหม่สำหรับ Production'}</button>
+      <button type="button" className="text-button" onClick={() => connect(true)} disabled={busy}>{busy ? 'กำลังเชื่อมต่อ…' : 'เริ่มใช้ Sheet ใหม่สำหรับ Production (สร้าง Sheet ใหม่)'}</button>
     </> : <>
       <b>ยังไม่ได้เชื่อม Google Sheet</b><small>{busy ? 'กำลังเชื่อมต่อและเตรียมข้อมูล…' : 'เชื่อมต่อเพื่อเริ่มใช้งานและบันทึกข้อมูล'}</small>
       {showConsent && <label className="google-consent"><input type="checkbox" checked={consentAccepted} disabled={busy} onChange={event => setConsentAccepted(event.target.checked)} /><span>อนุญาตให้ PetCare สร้างและบันทึกข้อมูลในไฟล์ Google Sheet ของฉัน</span></label>}
-      <button type="button" className="text-button" onClick={() => connect(false)} disabled={busy || !consentAccepted}>{busy ? 'กำลังเชื่อมต่อ…' : buttonLabel}</button>
+      <button type="button" className="text-button" onClick={primaryAction} disabled={busy || !consentAccepted}>{busy ? 'กำลังเชื่อมต่อ…' : primaryLabel}</button>
       <button type="button" className="text-button" onClick={loadSheets} disabled={busy || !consentAccepted}>เลือก Sheet ที่เคยสร้าง</button>
       {sheetPicker}
     </>}

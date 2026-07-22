@@ -15,10 +15,11 @@ vi.mock('./remoteState.js', async () => {
 })
 vi.mock('./googleAuth.js', () => ({
   isGoogleConfigured: () => true,
+  loadGoogleIdentityServices: () => Promise.resolve(),
   requestGoogleAccessToken: requestGoogleAccessTokenMock,
   getGoogleUserProfile: getGoogleUserProfileMock,
 }))
-vi.mock('./googleSheets.js', () => ({ createOrFindPetCareSheet: createSheetMock }))
+vi.mock('./googleSheets.js', () => ({ createOrFindPetCareSheet: createSheetMock, listPetCareSheets: vi.fn().mockResolvedValue([]) }))
 
 import App from './App.jsx'
 
@@ -62,6 +63,7 @@ describe('App remote sync integration', () => {
       }
       fireEvent.click(screen.getByRole('checkbox'))
       fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+      fireEvent.click(screen.getByRole('button', { name: /สร้าง Sheet ใหม่/ }))
       await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
     }
 
@@ -101,6 +103,7 @@ describe('App remote sync integration', () => {
     window.localStorage.removeItem('petcare.local.v1')
     render(<App />)
     await connect()
+    fireEvent.click(screen.getByRole('button', { name: /สร้าง Sheet ใหม่/ }))
     await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
     expect(screen.getByRole('button', { name: 'ไข้' })).toBeTruthy()

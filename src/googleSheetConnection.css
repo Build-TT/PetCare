@@ -13,6 +13,7 @@
 .sheet-profile-skeleton i { width: 150px; height: 9px; border-radius: 6px; }
 .sheet-profile-skeleton i:last-child { width: 100px; }
 .google-sheet-picker { display: grid; gap: 6px; margin: 8px 0; }
+.google-sheet-choice-actions { display: grid; gap: 6px; }
 .google-sheet-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; padding: 9px 10px; border: 1px solid #eadfd8; border-radius: 10px; background: #fffaf7; cursor: pointer; }
 .google-sheet-option span { display: grid; gap: 3px; }
 .google-sheet-option small { color: #8a7467; }

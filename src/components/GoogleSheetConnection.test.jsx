@@ -4,11 +4,12 @@ import GoogleSheetConnection from './GoogleSheetConnection.jsx'
 
 const { createOrFindPetCareSheet } = vi.hoisted(() => ({ createOrFindPetCareSheet: vi.fn() }))
 
-vi.mock('../googleSheets.js', () => ({ createOrFindPetCareSheet }))
+vi.mock('../googleSheets.js', () => ({ createOrFindPetCareSheet, listPetCareSheets: vi.fn().mockResolvedValue([]) }))
 
 vi.mock('../googleAuth.js', () => ({
   getGoogleUserProfile: vi.fn(),
   isGoogleConfigured: () => true,
+  loadGoogleIdentityServices: () => Promise.resolve(),
   requestGoogleAccessToken: vi.fn(),
 }))
 

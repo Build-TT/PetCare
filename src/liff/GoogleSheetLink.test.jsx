@@ -10,6 +10,7 @@ const { requestGoogleAccessToken, initLiff, linkGoogleSheet } = vi.hoisted(() =>
 
 vi.mock('../googleAuth.js', () => ({
   isGoogleConfigured: () => true,
+  loadGoogleIdentityServices: () => Promise.resolve(),
   requestGoogleAccessToken,
 }))
 vi.mock('./utils.js', () => ({ initLiff, linkGoogleSheet }))
