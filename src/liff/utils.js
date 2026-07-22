@@ -1,6 +1,4 @@
-// ค่าจาก env (Vite) — อ่านชีตตรงผ่าน Sheets API, เขียนผ่าน GAS web app
-export const SHEET_ID = import.meta.env.VITE_SHEET_ID || ''
-export const API_KEY  = import.meta.env.VITE_API_KEY  || ''
+// ค่าจาก env (Vite) — ทุกการอ่าน/เขียนผ่าน authenticated GAS web app
 export const GAS_URL  = import.meta.env.VITE_GAS_URL  || ''
 
 // LIFF IDs — hardcode เหมือนระบบเดิม (ตั้งค่าหลังสร้าง LIFF app, ดู README)
@@ -10,61 +8,62 @@ export const LIFF_IDS = {
   pets:  '',
   meds:  '',
   types: '',
+  pet:   '',
 }
 
-const BASE = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values`
+let liffAccessToken = ''
 
 // โหลด LIFF SDK แบบ dynamic — เฉพาะเมื่อเรียก initLiff
 // ไม่ redirect login เมื่อเปิดในเบราว์เซอร์ปกติ (ใช้งานได้ทั้งสองทาง)
 export async function initLiff(pageKey) {
-  try {
-    if (typeof liff === 'undefined') {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script')
-        script.src = 'https://static.line-scdn.net/liff/edge/2/sdk.js'
-        script.charset = 'utf-8'
-        script.onload = resolve
-        script.onerror = reject
-        document.head.appendChild(script)
-      })
-    }
-    const liffId = LIFF_IDS[pageKey]
-    if (!liffId) return
-    await liff.init({ liffId })
-    if (liff.isInClient() && !liff.isLoggedIn()) {
-      liff.login()
-    }
-  } catch (e) {
-    console.warn('LIFF init skipped:', e.message)
-    // ไม่ crash — ใช้งานได้ในเบราว์เซอร์ปกติ
+  const liffId = LIFF_IDS[pageKey]
+  if (!liffId) throw new Error(`ยังไม่ได้ตั้งค่า LIFF ID สำหรับ ${pageKey}`)
+  if (typeof liff === 'undefined') {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script')
+      script.src = 'https://static.line-scdn.net/liff/edge/2/sdk.js'
+      script.charset = 'utf-8'
+      script.onload = resolve
+      script.onerror = () => reject(new Error('โหลด LINE LIFF SDK ไม่สำเร็จ'))
+      document.head.appendChild(script)
+    })
   }
+  await liff.init({ liffId })
+  if (!liff.isLoggedIn()) {
+    liff.login()
+    throw new Error('กรุณาเข้าสู่ระบบ LINE เพื่อดำเนินการต่อ')
+  }
+  liffAccessToken = liff.getAccessToken() || ''
+  if (!liffAccessToken) throw new Error('ไม่พบ LINE access token')
+  return liffAccessToken
 }
 
 // อ่านชีตหนึ่ง tab → array ของ object (row 1 = headers)
 export async function fetchSheet(name) {
-  if (!SHEET_ID || !API_KEY) throw new Error('ยังไม่ได้ตั้งค่า VITE_SHEET_ID / VITE_API_KEY')
-  const res = await fetch(`${BASE}/${encodeURIComponent(name)}?key=${API_KEY}`)
-  if (!res.ok) throw new Error(`โหลด ${name} ไม่ได้: ${res.status}`)
-  const data = await res.json()
-  const rows = data.values || []
-  if (rows.length < 2) return []
-  const headers = rows[0]
-  return rows.slice(1).map(row => {
-    const obj = {}
-    headers.forEach((h, i) => { obj[h] = row[i] || '' })
-    return obj
-  })
+  const data = await sendToGAS({ action: 'readSheet', sheet: name })
+  return data.rows || []
 }
 
-// เขียนผ่าน GAS — Apps Script web app รับเฉพาะ GET + URL params
-export async function sendToGAS(payload) {
-  if (!GAS_URL) throw new Error('ยังไม่ได้ตั้งค่า VITE_GAS_URL')
-  const params = new URLSearchParams(
-    Object.fromEntries(Object.entries(payload).map(([k, v]) => [k, String(v)]))
-  )
-  const res = await fetch(`${GAS_URL}?${params.toString()}`)
-  if (!res.ok) throw new Error('GAS error: ' + res.status)
-  return res.json()
+export async function linkGoogleSheet(googleAccessToken, spreadsheetId = '', endpoint = GAS_URL) {
+  return sendToGAS({ action: 'linkGoogleSheet', google_access_token: googleAccessToken, spreadsheet_id: spreadsheetId }, endpoint)
+}
+
+// อ่านและเขียนผ่าน GAS authenticated POST เท่านั้น
+export async function sendToGAS(payload, endpoint = GAS_URL) {
+  if (!endpoint) throw new Error('ยังไม่ได้ตั้งค่า VITE_GAS_URL')
+  if (!liffAccessToken) throw new Error('ไม่พบ LINE access token; กรุณาเปิดผ่าน LIFF ใหม่')
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${liffAccessToken}` },
+    body: JSON.stringify({ ...payload, access_token: liffAccessToken }),
+  })
+  let data = null
+  try { data = await res.json() } catch { /* handled below */ }
+  if (!res.ok) throw new Error(data?.message || data?.error || `GAS error: ${res.status}`)
+  if (!data || data.status === 'error' || data.ok === false) {
+    throw new Error(data?.message || data?.error || 'GAS request failed')
+  }
+  return data
 }
 
 // วันที่ปัจจุบันแบบ YYYY-MM-DD (เวลาเครื่อง)
