@@ -9,8 +9,15 @@ async function call(action, payload = {}) {
   return data
 }
 
-export function getAccountSession(storage = window.localStorage) {
-  try { return JSON.parse(storage.getItem(SESSION_KEY) || 'null') } catch { return null }
+export function getAccountSession(storage) {
+  const stores = storage ? [storage] : [window.localStorage, window.sessionStorage]
+  for (const store of stores) {
+    try {
+      const session = JSON.parse(store.getItem(SESSION_KEY) || 'null')
+      if (session) return session
+    } catch { /* try the next storage */ }
+  }
+  return null
 }
 
 export function saveAccountSession(session, storage = window.localStorage) {
@@ -18,10 +25,19 @@ export function saveAccountSession(session, storage = window.localStorage) {
   return session
 }
 
-export function clearAccountSession(storage = window.localStorage) { storage.removeItem(SESSION_KEY) }
+export function clearAccountSession(storage) {
+  if (storage) return storage.removeItem(SESSION_KEY)
+  window.localStorage.removeItem(SESSION_KEY)
+  window.sessionStorage.removeItem(SESSION_KEY)
+}
 
-export async function registerAccount(input) { return saveAccountSession(await call('accountRegister', input)) }
-export async function loginAccount(username, password) { return saveAccountSession(await call('accountLogin', { username, password })) }
+function rememberSession(session, rememberMe) {
+  clearAccountSession()
+  return saveAccountSession(session, rememberMe ? window.localStorage : window.sessionStorage)
+}
+
+export async function registerAccount(input, rememberMe = true) { return rememberSession(await call('accountRegister', input), rememberMe) }
+export async function loginAccount(username, password, rememberMe = true) { return rememberSession(await call('accountLogin', { username, password }), rememberMe) }
 export async function loadAccountState(sessionToken) { return (await call('accountReadState', { session_token: sessionToken })).state }
 export async function saveAccountState(sessionToken, state) { return call('accountSaveState', { session_token: sessionToken, state }) }
 export async function inviteAccountUser(accessToken, spreadsheetId, email, role = 'user') {
