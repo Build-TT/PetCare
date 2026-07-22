@@ -56,7 +56,7 @@ var LINE_GROUP_SELECTIONS_PROPERTY = 'PETCARE_LINE_GROUP_SELECTIONS'
 var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 var ACCOUNT_USERS_PROPERTY = 'PETCARE_ACCOUNT_USERS'
 var ACCOUNT_SESSIONS_PROPERTY = 'PETCARE_ACCOUNT_SESSIONS'
-var PETCARE_BACKEND_VERSION = '2026.07.22.1'
+var PETCARE_BACKEND_VERSION = '2026.07.23.1'
 var CURRENT_ACCOUNT_USER = null
 
 var DEFAULT_LOG_TYPES = [
@@ -424,6 +424,7 @@ function doPost(e) {
     if (p.action === 'accountGoogleLogin') return json(googleLoginAccount(p))
     if (p.action === 'accountMembers') return json(accountMembers(p, verifyGoogleIdentity(p.google_access_token)))
     if (p.action === 'appVersion') return json({ status: 'ok', version: PETCARE_BACKEND_VERSION })
+    if (p.action === 'accountReadSession') return json({ status: 'ok', user: accountPublic(verifyAccountSession(p.session_token)) })
     if (p.action === 'accountReadState' || p.action === 'accountSaveState') {
       verifyAccountSession(p.session_token)
       return json(p.action === 'accountReadState' ? accountReadState() : accountSaveState(p.state))

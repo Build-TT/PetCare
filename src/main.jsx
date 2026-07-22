@@ -9,7 +9,7 @@ import PetDetail from './pages/PetDetail.jsx'
 import { parseRoute } from './routes.js'
 import AccountGate from './components/AccountGate.jsx'
 import InstallAppPrompt from './components/InstallAppPrompt.jsx'
-import { clearAccountSession, getAccountSession } from './accountAuth.js'
+import { clearAccountSession, getAccountSession, loadAccountProfile, saveAccountSession } from './accountAuth.js'
 import './index.css'
 import './appFeatures.css'
 
@@ -29,9 +29,21 @@ export function Router() {
 
 function MainApp({ initialPage }) {
   const [session, setSession] = React.useState(() => getAccountSession())
+  React.useEffect(() => {
+    if (!session?.session_token) return undefined
+    let active = true
+    loadAccountProfile(session.session_token).then(user => {
+      if (!active || !user) return
+      const next = { ...session, user }
+      setSession(next)
+      const storage = window.localStorage.getItem('petcare.account-session.v1') ? window.localStorage : window.sessionStorage
+      saveAccountSession(next, storage)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [session?.session_token])
   return <><InstallAppPrompt />{!session?.session_token
     ? <AccountGate onAuthenticated={setSession} />
-    : <App initialPage={initialPage} accountSession={session} onLogout={() => { clearAccountSession(); window.location.reload() }} />}</>
+    : <App key={`${session.session_token}:${session.user?.spreadsheet_id || ''}`} initialPage={initialPage} accountSession={session} onLogout={() => { clearAccountSession(); window.location.reload() }} />}</>
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

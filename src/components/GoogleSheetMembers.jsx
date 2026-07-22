@@ -44,7 +44,12 @@ export default function GoogleSheetMembers({ connection }) {
     if (!window.confirm(`ยกเลิกสิทธิ์ ${permission.emailAddress || permission.displayName || 'ผู้ใช้นี้'} หรือไม่`)) return
     setBusy(true); setError('')
     try { await revokeSheetAccess(connection.accessToken, connection.spreadsheetId, permission.id); await refresh() }
-    catch (removeError) { setError(removeError.message || 'ยกเลิกสิทธิ์ไม่สำเร็จ') }
+    catch (removeError) {
+      if (removeError.status === 404 || /Permission not found/i.test(removeError.message || '')) {
+        setMembers(current => current.filter(item => item.id !== permission.id))
+        setMessage('สิทธิ์นี้ถูกลบไปแล้ว รายการถูกอัปเดตเรียบร้อย')
+      } else setError(removeError.message || 'ยกเลิกสิทธิ์ไม่สำเร็จ')
+    }
     finally { setBusy(false) }
   }
 

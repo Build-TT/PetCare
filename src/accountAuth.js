@@ -46,6 +46,7 @@ export async function loginAccount(username, password, rememberMe = true) { retu
 export async function loginGoogleAccount(accessToken, rememberMe = true) { return rememberSession(await call('accountGoogleLogin', { google_access_token: accessToken }), rememberMe) }
 export async function loadAccountState(sessionToken) { return (await call('accountReadState', { session_token: sessionToken })).state }
 export async function saveAccountState(sessionToken, state) { return call('accountSaveState', { session_token: sessionToken, state }) }
+export async function loadAccountProfile(sessionToken) { return (await call('accountReadSession', { session_token: sessionToken })).user }
 export async function inviteAccountUser(accessToken, spreadsheetId, email, role = 'user') {
   return call('accountInvite', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, email, role, app_url: window.location.origin })
 }

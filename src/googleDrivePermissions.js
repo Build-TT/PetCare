@@ -10,7 +10,9 @@ async function driveFetch(url, options = {}) {
   if (!response.ok) {
     let message = `Google Drive error (${response.status})`
     try { message = (await response.json()).error?.message || message } catch { /* keep generic */ }
-    throw new Error(message)
+    const error = new Error(message)
+    error.status = response.status
+    throw error
   }
   return response.status === 204 ? null : response.json()
 }
