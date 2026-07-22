@@ -233,8 +233,12 @@ function migrateLegacyOwners(state) {
 function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
   const storedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
+  const isGoogleAccount = accountSession?.user?.username?.startsWith('google-')
+  const hasMatchingLocalGoogleSheet = isGoogleAccount && storedGoogleSheet?.email && accountSession.user.email && storedGoogleSheet.email.toLowerCase() === accountSession.user.email.toLowerCase()
   const rememberedGoogleSheet = accountSession?.user?.username
-    ? (accountSession.user.spreadsheet_id ? { mode: 'account', spreadsheetId: accountSession.user.spreadsheet_id, email: accountSession.user.email, name: 'PetCare shared Sheet' } : null)
+    ? (accountSession.user.spreadsheet_id
+      ? { mode: 'account', spreadsheetId: accountSession.user.spreadsheet_id, email: accountSession.user.email, name: 'PetCare shared Sheet' }
+      : (hasMatchingLocalGoogleSheet ? { ...storedGoogleSheet, mode: 'google' } : null))
     : storedGoogleSheet
   const hasRememberedGoogleSheet = Boolean(rememberedGoogleSheet?.spreadsheetId)
   const hasCompletedGoogleOnboarding = hasRememberedGoogleSheet
@@ -782,8 +786,8 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
         setGoogleConnection(current => current || { ...rememberedGoogleSheet })
         setRemoteReady(false)
         setShowGoogleOnboarding(false)
-        setSyncStatus('error')
-        setSyncError(error.message || 'กรุณาเชื่อมต่อ Google Sheet ใหม่')
+        setSyncStatus('idle')
+        setSyncError('')
       }
     }
     restoreGoogleConnection()

@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react'
 import GoogleSheetConnection from './GoogleSheetConnection.jsx'
 import GoogleSheetMembers from './GoogleSheetMembers.jsx'
 import LineGroupSettings from './LineGroupSettings.jsx'
+import { getAccountBackendVersion } from '../accountAuth.js'
+import { APP_VERSION } from '../appVersion.js'
 
 export default function SettingsSurface({
   section,
@@ -26,7 +29,25 @@ export default function SettingsSurface({
   onOpenReminders,
   onLogout,
 }) {
+  const [backendVersion, setBackendVersion] = useState(null)
+  const [backendError, setBackendError] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    getAccountBackendVersion()
+      .then(result => active && setBackendVersion(result.version || 'ไม่ระบุ'))
+      .catch(() => active && setBackendError(true))
+    return () => { active = false }
+  }, [])
+
   const back = () => onSectionChange('')
+  const versionStatus = backendError
+    ? 'ตรวจ backend ไม่ได้ — อาจยังไม่ได้ Deploy เวอร์ชันล่าสุด'
+    : backendVersion && backendVersion !== APP_VERSION
+      ? 'เวอร์ชันไม่ตรงกัน — กรุณา Deploy backend ล่าสุด'
+      : backendVersion
+        ? 'เวอร์ชันตรงกัน'
+        : 'กำลังตรวจสอบ backend…'
 
   if (!section) {
     return <section className="settings-overview" aria-label="เมนูตั้งค่า">
@@ -37,6 +58,7 @@ export default function SettingsSurface({
       <button className="setting setting-action" onClick={() => onSectionChange('members')}><b>ผู้ใช้งาน PetCare</b><small>เพิ่มผู้ใช้และกำหนดสิทธิ์การเข้าถึงข้อมูล</small></button>
       <button className="setting setting-action" onClick={() => onSectionChange('google')}><b>Google Sheet</b><small>เชื่อมต่อและจัดการการซิงก์ข้อมูล</small></button>
       {onLogout && <button className="setting setting-action settings-logout" type="button" onClick={onLogout}><b>ออกจากระบบ</b><small>ออกจากบัญชี PetCare บนอุปกรณ์นี้</small></button>}
+      <section className="settings-version" aria-label="เวอร์ชันระบบ"><b>เวอร์ชันระบบ</b><small>Web app: {APP_VERSION}</small><small>Account backend: {backendVersion || (backendError ? 'ตรวจไม่ได้' : 'กำลังตรวจสอบ…')}</small><small className={backendError || backendVersion !== APP_VERSION ? 'danger' : ''}>{versionStatus}</small></section>
     </section>
   }
 

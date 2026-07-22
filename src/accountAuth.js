@@ -5,7 +5,10 @@ async function call(action, payload = {}) {
   if (!GAS_URL) throw new Error('ยังไม่ได้ตั้งค่า VITE_GAS_URL')
   const response = await fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...payload }) })
   const data = await response.json().catch(() => null)
-  if (!response.ok || data?.status === 'error') throw new Error(data?.message || `PetCare account error (${response.status})`)
+  if (!response.ok || data?.status === 'error') {
+    if (action.startsWith('account') && data?.message === 'Missing LINE access token') throw new Error('Account backend ยังไม่อัปเดต กรุณา Deploy Google Apps Script เวอร์ชันล่าสุด')
+    throw new Error(data?.message || `PetCare account error (${response.status})`)
+  }
   return data
 }
 
@@ -47,3 +50,4 @@ export async function inviteAccountUser(accessToken, spreadsheetId, email, role 
 export async function listAccountUsers(accessToken, spreadsheetId) {
   return call('accountMembers', { google_access_token: accessToken, spreadsheet_id: spreadsheetId })
 }
+export async function getAccountBackendVersion() { return call('appVersion') }
