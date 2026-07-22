@@ -47,7 +47,7 @@ export async function loginGoogleAccount(accessToken, rememberMe = true) { retur
 export async function loadAccountState(sessionToken) { return (await call('accountReadState', { session_token: sessionToken })).state }
 export async function saveAccountState(sessionToken, state) { return call('accountSaveState', { session_token: sessionToken, state }) }
 export async function inviteAccountUser(accessToken, spreadsheetId, email, role = 'user') {
-  return call('accountInvite', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, email, role })
+  return call('accountInvite', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, email, role, app_url: window.location.origin })
 }
 export async function listAccountUsers(accessToken, spreadsheetId) {
   return call('accountMembers', { google_access_token: accessToken, spreadsheet_id: spreadsheetId })

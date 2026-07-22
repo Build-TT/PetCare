@@ -320,6 +320,19 @@ function googleLoginAccount(p) {
       return false
     })
   }
+  if (user && !user.spreadsheet_id) {
+    Object.keys(users).some(function (candidate) {
+      var invite = users[candidate]
+      if (candidate.indexOf('__invite__') === 0 && String(invite.email || '').toLowerCase() === google.email) {
+        user.spreadsheet_id = invite.spreadsheet_id || ''
+        user.role = invite.role || user.role || 'user'
+        user.updated_at = nowIso()
+        delete users[candidate]
+        return true
+      }
+      return false
+    })
+  }
   if (!user) {
     key = googleAccountUsername(users)
     user = { username: key, email: google.email, name: '', surname: '', role: 'user', spreadsheet_id: '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
@@ -335,9 +348,14 @@ function inviteAccount(p, google) {
   var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email)
   setupSheets(file.id)
   var users = accountStore(ACCOUNT_USERS_PROPERTY), code = accountToken().slice(0, 12).toUpperCase()
-  users['__invite__' + code] = { email: String(p.email || '').trim().toLowerCase(), role: String(p.role || 'user'), spreadsheet_id: file.id, owner_email: google.email, created_at: nowIso() }
+  var inviteEmail = String(p.email || '').trim().toLowerCase()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteEmail)) throw new Error('Invite email is invalid')
+  users['__invite__' + code] = { email: inviteEmail, role: String(p.role || 'user'), spreadsheet_id: file.id, owner_email: google.email, app_url: String(p.app_url || ''), created_at: nowIso() }
   saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
-  return { status: 'ok', invite_code: code, spreadsheet_id: file.id }
+  var inviteUrl = String(p.app_url || '').replace(/\/$/, '')
+  var body = 'You have been invited to PetCare.\n\nEmail: ' + inviteEmail + '\nInvite code: ' + code + '\n\nOpen PetCare: ' + (inviteUrl || 'the PetCare website') + '\n\nIf you use Google, choose Login with Google using this email. Otherwise choose Register and enter the Invite code.'
+  if (typeof MailApp !== 'undefined') MailApp.sendEmail(inviteEmail, 'PetCare invitation', body)
+  return { status: 'ok', invite_code: code, spreadsheet_id: file.id, email_sent: typeof MailApp !== 'undefined' }
 }
 function accountMembers(p, google) {
   var spreadsheetId = String(p.spreadsheet_id || '').trim()

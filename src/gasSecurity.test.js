@@ -53,6 +53,26 @@ describe('GAS security behavior', () => {
     expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS')).not.toHaveProperty('__invite__CODE123')
   })
 
+  it('applies a later invite to an existing Google account before creating its session', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: {
+        PETCARE_ACCOUNT_USERS: JSON.stringify({
+          existing: { username: 'existing', email: 'user@example.com', role: 'user', spreadsheet_id: '', active: true },
+          __invite__CODE123: { email: 'user@example.com', role: 'user', spreadsheet_id: 'sheet-shared', owner_email: 'owner@example.com' },
+        }),
+      },
+      fetchImpl: () => response(200, {}),
+    })
+    sandbox.accountToken = vi.fn(() => 'token123456789')
+    sandbox.verifyGoogleIdentity = vi.fn(() => ({ sub: 'google-user', email: 'user@example.com' }))
+
+    const session = sandbox.googleLoginAccount({ google_access_token: 'google-token' })
+
+    expect(session.user.username).toBe('existing')
+    expect(session.user.spreadsheet_id).toBe('sheet-shared')
+    expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS')).not.toHaveProperty('__invite__CODE123')
+  })
+
   it('initializes the legacy migration backup alongside normalized sheets', () => {
     const { sandbox } = makeGasSandbox({ fetchImpl: () => response(200, {}) })
     expect(sandbox.SHEETS.app_state).toEqual(['key', 'value', 'updated_at'])

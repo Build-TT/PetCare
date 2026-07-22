@@ -52,7 +52,7 @@ export default function GoogleSheetMembers({ connection }) {
     event.preventDefault(); setBusy(true); setError(''); setMessage('')
     try {
       const result = await inviteAccountUser(connection.accessToken, connection.spreadsheetId, accountEmail, 'user')
-      setAccountEmail(''); setInviteCode(result.invite_code); setMessage('สร้างคำเชิญแล้ว ส่ง Invite code ให้ผู้ใช้สมัครบัญชี PetCare')
+      setAccountEmail(''); setInviteCode(result.invite_code); setMessage('ส่งอีเมลเชิญแล้ว ให้ผู้ใช้เปิดอีเมลและ Login ด้วย Google อีเมลเดียวกัน หรือสมัครด้วย Invite code')
       await refresh()
     } catch (inviteError) { setError(inviteError.message || 'สร้างคำเชิญไม่สำเร็จ') }
     finally { setBusy(false) }
