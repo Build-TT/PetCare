@@ -3,7 +3,9 @@ const SESSION_KEY = 'petcare.account-session.v1'
 
 async function call(action, payload = {}) {
   if (!GAS_URL) throw new Error('ยังไม่ได้ตั้งค่า VITE_GAS_URL')
-  const response = await fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...payload }) })
+  // Apps Script redirects /exec POST requests. text/plain keeps this a
+  // simple cross-origin request so mobile browsers do not fail on preflight.
+  const response = await fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify({ action, ...payload }) })
   const data = await response.json().catch(() => null)
   if (!response.ok || data?.status === 'error') {
     if (action.startsWith('account') && data?.message === 'Missing LINE access token') throw new Error('Account backend ยังไม่อัปเดต กรุณา Deploy Google Apps Script เวอร์ชันล่าสุด')
