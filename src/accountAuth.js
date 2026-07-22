@@ -53,4 +53,13 @@ export async function inviteAccountUser(accessToken, spreadsheetId, email, role 
 export async function listAccountUsers(accessToken, spreadsheetId) {
   return call('accountMembers', { google_access_token: accessToken, spreadsheet_id: spreadsheetId })
 }
+export async function revokeAccountUser(accessToken, spreadsheetId, username) {
+  return call('accountRevoke', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, username })
+}
+export async function removeAccountAccess(accessToken, spreadsheetId, email) {
+  return call('accountRemoveAccess', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, email })
+}
+export async function cancelAccountInvite(accessToken, spreadsheetId, inviteCode) {
+  return call('accountCancelInvite', { google_access_token: accessToken, spreadsheet_id: spreadsheetId, invite_code: inviteCode })
+}
 export async function getAccountBackendVersion() { return call('appVersion') }

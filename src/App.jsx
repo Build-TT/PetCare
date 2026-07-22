@@ -230,7 +230,7 @@ function migrateLegacyOwners(state) {
   }), { ...state })
 }
 
-function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
+function App({ initialPage = 'home', accountSession = null, role = accountSession?.user?.role, onLogout = null }) {
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
   const storedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
   const isGoogleAccount = accountSession?.user?.username?.startsWith('google-')
@@ -318,6 +318,7 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
   const [logEditDiary, setLogEditDiary] = useState('')
   const [activityError, setActivityError] = useState('')
   const [treatmentError, setTreatmentError] = useState('')
+  const isReader = role === 'reader'
   const availablePets = pets.filter(item => item.active !== false)
   const activePet = availablePets.find(item => item.id === activePetId) || availablePets[0] || defaultPets[0]
   const activePetLabel = activePet.demo ? `${activePet.name} (Demo profile)` : activePet.name
@@ -369,23 +370,24 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
     setSymptomError('')
   }
   const navigateMainPage = nextPage => {
-    if (nextPage !== page) {
-      clearTrackDraft()
-      clearSymptomDraft()
-    }
     if (nextPage === 'settings') setSettingsSection('')
     setPage(nextPage)
     window.history.pushState({}, '', mainPageHref(nextPage))
   }
 
   useEffect(() => {
-    saveStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId })
-  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId])
+    if (isReader) return undefined
+    const persistedPets = pets.filter(pet => !pet.demo)
+    const persistedActivePetId = persistedPets.some(pet => pet.id === activePetId) ? activePetId : ''
+    saveStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedActivePetId })
+  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, isReader])
 
   useEffect(() => {
+    if (isReader) return undefined
     if (!googleConnection || !remoteReady) return undefined
     const requestRevision = ++remoteRevisionRef.current
-    const pendingState = { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId }
+    const persistedPets = pets.filter(pet => !pet.demo)
+    const pendingState = { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedPets.some(pet => pet.id === activePetId) ? activePetId : '' }
     saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })
     if (isCurrentRemoteRevision(remoteRevisionRef.current, requestRevision)) {
       setSyncStatus('pending')
@@ -414,7 +416,7 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
         })
     }, 500)
     return () => window.clearTimeout(timeout)
-  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady])
+  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader])
 
   const handleGoogleConnected = async (connection) => {
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
@@ -462,6 +464,7 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
     setSelectedSymptoms([]); setSelectedTracks([]); setNote(''); setDatetime(nowLocal())
   }
   const openTrackForm = (track = null) => {
+    if (!track && trackFormOpen) return
     setEditingTrackId(track?.id || '')
     setTrackName(track?.name || '')
     setTrackDose(track?.dose || '')
@@ -614,7 +617,7 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
     setEditingSymptomId('')
     resetSymptomForm()
   }
-  const openSymptomForm = (symptom = null) => { setEditingSymptomId(symptom?.id || ''); setSymptomName(symptomLabel(symptom || '')); setSymptomError(''); setSymptomFormOpen(true) }
+  const openSymptomForm = (symptom = null) => { if (!symptom && symptomFormOpen) return; setEditingSymptomId(symptom?.id || ''); setSymptomName(symptomLabel(symptom || '')); setSymptomError(''); setSymptomFormOpen(true) }
   const resetProfileForm = () => {
     setProfileFormOpen(false)
     setEditingPetId('')
@@ -777,17 +780,17 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
           accessToken,
         }
         await handleGoogleConnected(connection)
-      } catch (error) {
+      } catch {
         if (cancelled) return
         // Do not discard the remembered Sheet on a transient/expired OAuth
         // token. Local data remains usable and the user can reconnect from
         // Settings; dropping this state used to make every pull-to-refresh
         // look like the Sheet had been disconnected.
-        setGoogleConnection(current => current || { ...rememberedGoogleSheet })
+        setGoogleConnection(null)
         setRemoteReady(false)
-        setShowGoogleOnboarding(false)
-        setSyncStatus('idle')
-        setSyncError('')
+        setShowGoogleOnboarding(true)
+        setSyncStatus('error')
+        setSyncError('Google Sheet session restore failed; reconnect Google to continue syncing. Local changes remain queued.')
       }
     }
     restoreGoogleConnection()
@@ -845,23 +848,20 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
         : page === 'settings' && settingsSection === 'symptoms'
           ? 'settings-symptoms'
           : 'none'
-    if (formContextRef.current && formContextRef.current !== context) {
-      clearTrackDraft()
-      clearSymptomDraft()
-    }
     formContextRef.current = context
-    if (context === 'none') {
-      clearTrackDraft()
-      clearSymptomDraft()
-    }
   }, [page, settingsSection, trackTab])
 
   const changeSettingsSection = nextSection => {
-    if (nextSection !== settingsSection) {
-      clearTrackDraft()
-      clearSymptomDraft()
-    }
     setSettingsSection(nextSection)
+  }
+
+  const blockReaderMutation = event => {
+    if (!isReader) return
+    const target = event.target.closest?.('button, input, textarea, select')
+    if (target && !target.closest('.bottom-nav')) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
   }
 
   const settingsSurface = <SettingsSurface
@@ -889,9 +889,10 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
     onLogout={onLogout}
   />
 
-  return <main className={`app-shell ${googleConnecting ? 'is-google-connecting' : ''}`} aria-busy={googleConnecting}>
+  return <main className={`app-shell ${googleConnecting ? 'is-google-connecting' : ''} ${isReader ? 'reader-mode' : ''}`} aria-busy={googleConnecting} onClickCapture={blockReaderMutation} onChangeCapture={blockReaderMutation}>
+    {isReader && <div className="reader-banner" role="status">บัญชีนี้มีสิทธิ์อ่านอย่างเดียว ไม่สามารถแก้ไขข้อมูลหรือการตั้งค่าได้</div>}
     {googleConnecting && <div className="google-connecting-overlay" role="status" aria-live="polite"><div className="google-connecting-card"><div className="sheet-profile-skeleton" aria-hidden="true"><span /><div><i /><i /></div></div><b>กำลังเชื่อมต่อ Google Sheet</b><small>กรุณารอสักครู่ ระบบกำลังเตรียมข้อมูลให้ปลอดภัย</small></div></div>}
-    {showGoogleOnboarding && <GoogleDriveOnboarding onConnected={handleGoogleConnected} onBusyChange={setGoogleConnecting} />}
+    {showGoogleOnboarding && <GoogleDriveOnboarding error={syncError} onConnected={handleGoogleConnected} onBusyChange={setGoogleConnecting} />}
     {profileFormOpen && <div className="profile-upload-wrap"><label className="profile-upload">รูปโปรไฟล์<input type="file" accept="image/*" onChange={handleProfilePhoto} /></label>{profilePhoto && <img className="profile-upload-preview" src={profilePhoto} alt="ตัวอย่างรูปโปรไฟล์" />}</div>}
     <header><div><small>PETCARE / {page.toUpperCase()}</small><h1>{page === 'home' ? `${activePetLabel} วันนี้เป็นไง?` : page === 'track' ? 'สมุดบันทึก' : page === 'diary' ? 'ประวัติการรักษา' : page === 'reminders' ? 'แจ้งเตือน' : 'ตั้งค่า'}</h1></div><button className="profile" aria-label="จัดการโปรไฟล์สัตว์เลี้ยง" onClick={() => setProfileOpen(!profileOpen)}>{activePet.photo ? <img className="profile-photo" src={activePet.photo} alt="" /> : <span className="profile-species-icon" aria-hidden="true">{petIcon(activePet)}</span>}<span>{activePetLabel}</span></button></header>
     {profileOpen && <section className="profile-panel" aria-label="โปรไฟล์สัตว์เลี้ยง"><div className="section-title"><h2>โปรไฟล์สัตว์เลี้ยง</h2><button className="text-button" onClick={() => openProfileForm()}>＋ เพิ่มโปรไฟล์</button></div>{profileFormOpen && <section className="form-card profile-form" aria-label="ฟอร์มโปรไฟล์สัตว์เลี้ยง"><label>ชื่อสัตว์เลี้ยง<input value={profileName} onChange={e => setProfileName(e.target.value)} /></label><label>ประเภทสัตว์<select value={profileSpecies} onChange={e => setProfileSpecies(e.target.value)}><option value="dog">สุนัข</option><option value="cat">แมว</option><option value="other">อื่นๆ</option></select></label><label>เพศ<select value={profileGender} onChange={e => setProfileGender(e.target.value)}><option value="">ไม่ระบุ</option><option value="male">ผู้</option><option value="female">เมีย</option></select></label><label>วันเกิด<input type="date" value={profileBirthdate} onChange={e => setProfileBirthdate(e.target.value)} /></label><label>สายพันธุ์<input value={profileBreed} onChange={e => setProfileBreed(e.target.value)} /></label><div className="form-actions"><button className="primary" disabled={!profileName.trim()} onClick={savePetProfile}>{editingPetId ? 'บันทึกการแก้ไข' : 'เพิ่มโปรไฟล์'}</button><button className="text-button" onClick={resetProfileForm}>ยกเลิก</button></div></section>}{availablePets.map(pet => <article className="profile-row" key={pet.id}><span className="profile-species-icon" aria-hidden="true">{petIcon(pet)}</span><button className="profile-select" onClick={() => { setActivePetId(pet.id); setProfileOpen(false) }}><b>{pet.name}{pet.id === activePet.id ? ' · กำลังใช้งาน' : ''}</b><small>{pet.breed || 'ยังไม่มีรายละเอียดเพิ่มเติม'}</small></button><button className="text-button" onClick={() => openProfileForm(pet)}>แก้ไข</button></article>)}</section>}
@@ -900,7 +901,7 @@ function App({ initialPage = 'home', accountSession = null, onLogout = null }) {
     {page === 'diary' && <><div className="section-title"><h2>ประวัติการรักษา</h2><button className="primary" onClick={() => setTreatmentFormOpen(true)}>＋ เพิ่มประวัติการรักษา</button></div><div className="data-table">{visibleTreatmentHistory.map(item => <article className="table-row" key={item.id}><time>{item.started_at?.slice(5, 10)}<br />{item.started_at?.slice(11, 16)}</time><div><b>{item.category} · {item.title}</b><p>{item.clinic}</p>{item.doctor && <p>หมอ: {item.doctor}</p>}<p>{item.note}</p></div><div className="row-actions"><button onClick={() => editTreatment(item)}>แก้ไข</button><button className="danger" onClick={() => setTreatmentHistory(treatmentHistory.filter(history => history.id !== item.id))}>ลบ</button></div></article>)}</div>{treatmentFormOpen && <section className="form-card treatment-form" aria-label="ฟอร์มประวัติการรักษา"><label>ประเภท<select value={treatmentCategory} onChange={e => setTreatmentCategory(e.target.value)}>{TREATMENT_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>{treatmentCategory === 'อื่นๆ' && <label>ระบุประเภท<input value={treatmentCustomCategory} onChange={e => setTreatmentCustomCategory(e.target.value)} /></label>}<label>รายการ<input value={treatmentTitle} onChange={e => setTreatmentTitle(e.target.value)} /></label><label>วันที่/เวลา<input type="datetime-local" value={treatmentStartedAt} onChange={e => setTreatmentStartedAt(e.target.value)} /></label><label>คลินิก<input value={treatmentClinic} onChange={e => setTreatmentClinic(e.target.value)} /></label><label>ชื่อหมอ<input value={treatmentDoctor} onChange={e => setTreatmentDoctor(e.target.value)} placeholder="เช่น นพ. ..." /></label><label>Note<textarea value={treatmentNote} onChange={e => setTreatmentNote(e.target.value)} /></label>{treatmentError && <small role="alert">{treatmentError}</small>}<button className="primary" disabled={!treatmentTitle.trim()} onClick={saveTreatment}>บันทึก</button></section>}</>}
     {page === 'reminders' && <section className="reminder-page"><div className="section-title"><div><h2>แจ้งเตือน</h2><small>ตั้งรอบและเวลาส่งแจ้งเตือนเข้า LINE</small></div><button className="primary reminder-create" onClick={() => { setStructuredReminderEditId(''); setStructuredReminderFormOpen(true) }}>＋ สร้างการแจ้งเตือน</button></div>{visibleReminders.length === 0 && <div className="reminder-empty"><b>ยังไม่มีการแจ้งเตือน</b><p>สร้างรายการแรกเพื่อกำหนดวัน รอบ และเวลาที่ต้องการ</p></div>}<div className="reminder-list">{visibleReminders.map(reminder => <article className={`reminder ${reminder.enabled ? '' : 'off'}`} key={reminder.id}><div className="reminder-card-head"><div><b>{reminder.title}</b><p>{reminder.detail}</p></div><button type="button" className="reminder-edit" aria-label={`แก้ไข ${reminder.title}`} onClick={() => editReminder(reminder)}>แก้ไข</button></div><div className="reminder-actions"><button type="button" onClick={() => setReminders(reminders.map(item => item.id === reminder.id ? { ...item, enabled: !item.enabled } : item))}>{reminder.enabled ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button><button type="button" className="danger" onClick={() => setReminders(reminders.filter(item => item.id !== reminder.id))}>ลบ</button></div></article>)}</div>{structuredReminderFormOpen && <ReminderForm key={structuredReminderEditId || 'new'} initialValue={reminderFormValue(visibleReminders.find(reminder => reminder.id === structuredReminderEditId))} onSave={saveStructuredReminder} onCancel={() => { setStructuredReminderFormOpen(false); setStructuredReminderEditId('') }} />}</section>}
     {page === 'settings' && settingsSurface}
-    <nav className="bottom-nav">{navItems.filter(([key]) => key !== 'reminders').map(([key, icon, label]) => <button aria-label={label} className={page === key ? 'active' : ''} key={key} onClick={() => navigateMainPage(key)}><span aria-hidden="true">{icon}</span>{label}</button>)}</nav>
+    <nav className="bottom-nav">{navItems.map(([key, icon, label]) => <button aria-label={label} className={page === key ? 'active' : ''} key={key} onClick={() => navigateMainPage(key)}><span aria-hidden="true">{icon}</span>{label}</button>)}</nav>
   </main>
 }
 

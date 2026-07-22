@@ -29,21 +29,34 @@ export function Router() {
 
 function MainApp({ initialPage }) {
   const [session, setSession] = React.useState(() => getAccountSession())
+  const [profileError, setProfileError] = React.useState('')
+  const [profileRetry, setProfileRetry] = React.useState(0)
   React.useEffect(() => {
     if (!session?.session_token) return undefined
     let active = true
+    setProfileError('')
     loadAccountProfile(session.session_token).then(user => {
       if (!active || !user) return
       const next = { ...session, user }
       setSession(next)
       const storage = window.localStorage.getItem('petcare.account-session.v1') ? window.localStorage : window.sessionStorage
       saveAccountSession(next, storage)
-    }).catch(() => undefined)
+    }).catch(error => {
+      if (!active) return
+      const message = String(error?.message || '')
+      if (/หมดอายุ|ไม่พบ|ถูกปิด|session/i.test(message)) {
+        clearAccountSession()
+        setSession(null)
+      } else {
+        setProfileError(message || 'โหลดบัญชี PetCare ไม่สำเร็จ')
+      }
+    })
     return () => { active = false }
-  }, [session?.session_token])
+  }, [session?.session_token, profileRetry])
+  if (session?.session_token && profileError) return <main className="account-gate"><section className="account-card"><h1>เชื่อมต่อบัญชีไม่สำเร็จ</h1><small role="alert" className="danger">{profileError}</small><button className="primary" onClick={() => setProfileRetry(value => value + 1)}>ลองใหม่</button><button className="text-button" onClick={() => { clearAccountSession(); setSession(null) }}>เข้าสู่ระบบใหม่</button></section></main>
   return <><InstallAppPrompt />{!session?.session_token
     ? <AccountGate onAuthenticated={setSession} />
-    : <App key={`${session.session_token}:${session.user?.spreadsheet_id || ''}`} initialPage={initialPage} accountSession={session} onLogout={() => { clearAccountSession(); window.location.reload() }} />}</>
+    : <App key={`${session.session_token}:${session.user?.spreadsheet_id || ''}`} initialPage={initialPage} accountSession={session} role={session.user?.role} onLogout={() => { clearAccountSession(); window.location.reload() }} />}</>
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

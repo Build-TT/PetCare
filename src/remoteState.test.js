@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { hydrateRemoteState, isCurrentRemoteRevision, selectPersistedState, unwrapPendingState } from './remoteState.js'
 
 describe('remote tracker state', () => {
+  it('never serializes the demo pet as persisted account or Sheet data', () => {
+    expect(selectPersistedState({ pets: [{ id: 'demo', demo: true }, { id: 'real', name: 'Mochi' }] }).pets).toEqual([{ id: 'real', name: 'Mochi' }])
+  })
   it('keeps the local seed state when a new Sheet has no app state', () => {
     const fallback = { tracks: [{ id: 'seed' }], logs: [], reminders: [], symptoms: ['ซึม'] }
     expect(hydrateRemoteState(null, fallback)).toEqual(fallback)

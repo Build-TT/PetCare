@@ -3,7 +3,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
-function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = 'gas-owner@example.com' } = {}) {
+function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = 'gas-owner@example.com', mailImpl } = {}) {
   const calls = []
   const logs = []
   const propertyWrites = []
@@ -24,6 +24,7 @@ function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = '
     },
     SpreadsheetApp: { openById: id => openById ? openById(id) : ({ getSheetByName: () => null }) },
     ScriptApp: {},
+    MailApp: { sendEmail: (...args) => mailImpl?.(...args) },
   }
   vm.runInNewContext(readFileSync(path.resolve('gas', 'Code.gs'), 'utf8'), sandbox)
   return { sandbox, calls, logs, propertyWrites }
@@ -32,6 +33,104 @@ function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = '
 const response = (code, body) => ({ getResponseCode: () => code, getContentText: () => JSON.stringify(body) })
 
 describe('GAS security behavior', () => {
+  it('does not let a password registration capture an invite for another email', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ __invite__CODE123: { email: 'invited@example.com', spreadsheet_id: 'sheet-1', role: 'writer' } }) },
+    })
+    sandbox.accountToken = vi.fn(() => 'token123456789')
+    expect(() => sandbox.registerAccount({ username: 'attacker', password: 'password123', name: 'A', surname: 'User', email: 'attacker@example.com', invite_code: 'CODE123' })).toThrow('does not match')
+    expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS')).toHaveProperty('__invite__CODE123')
+  })
+
+  it('round-trips invited writes through the normalized tabs used by Google owners and reminders', () => {
+    const { sandbox } = makeGasSandbox()
+    const objects = sandbox.accountStateObjects({
+      pets: [{ id: 'p1', name: 'Mochi' }],
+      reminders: [{ id: 'r1', title: 'Medicine', enabled: true, schedule_config: { time: '08:00' } }],
+      lineRecipients: [{ id: 'rr1', reminder_id: 'r1', recipient_id: 'line-recipient' }],
+    }, 'timestamp')
+    expect(objects.pets[0]).toMatchObject({ id: 'p1', name: 'Mochi' })
+    expect(objects.reminders[0]).toMatchObject({ id: 'r1', active: true })
+    expect(objects.reminder_recipients[0]).toMatchObject({ reminder_id: 'r1', recipient_id: 'line-recipient' })
+  })
+
+  it('rejects every account write for reader accounts and includes locking/throttling guards', () => {
+    const { sandbox } = makeGasSandbox()
+    expect(sandbox.accountCanWrite({ role: 'reader' })).toBe(false)
+    expect(sandbox.accountCanWrite({ role: 'writer' })).toBe(true)
+    expect(readFileSync(path.resolve('gas', 'Code.gs'), 'utf8')).toMatch(/withAccountLock[\s\S]*ACCOUNT_THROTTLE_PROPERTY/)
+    sandbox.CURRENT_ACCOUNT_USER = { role: 'reader', spreadsheet_id: 'sheet-1' }
+    sandbox.accountWriteNormalizedState = vi.fn()
+    expect(() => sandbox.accountSaveState({})).toThrow('อ่านอย่างเดียว')
+    expect(sandbox.accountWriteNormalizedState).not.toHaveBeenCalled()
+  })
+  it('makes a new invitation idempotent and exposes MailApp failure without losing the pending code', () => {
+    const { sandbox, propertyWrites } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: '{}' },
+      fetchImpl: () => response(200, { id: 'sheet-1', name: 'Sheet', mimeType: 'application/vnd.google-apps.spreadsheet', owners: [{ emailAddress: 'owner@example.com' }] }),
+      mailImpl: () => { throw new Error('quota exceeded') },
+    })
+    sandbox.setupSheets = vi.fn()
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Sheet' }))
+    sandbox.shareWithScriptIdentity = vi.fn()
+    sandbox.accountToken = vi.fn(() => 'token123456789')
+    sandbox.accountToken = vi.fn(() => 'token123456789')
+    const first = sandbox.inviteAccount({ spreadsheet_id: 'sheet-1', google_access_token: 'token', email: 'user@example.com' }, { email: 'owner@example.com', sub: 'owner' })
+    const second = sandbox.inviteAccount({ spreadsheet_id: 'sheet-1', google_access_token: 'token', email: 'USER@example.com' }, { email: 'owner@example.com', sub: 'owner' })
+    expect(first.email_sent).toBe(false)
+    expect(first.email_error).toContain('share the Invite code')
+    expect(second.invite_code).toBe(first.invite_code)
+    expect(propertyWrites.filter(item => item.key === 'PETCARE_ACCOUNT_USERS')).toHaveLength(1)
+  })
+
+  it('does not bind an existing password account by email; it creates a deliberate pending invite', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ existing: { username: 'existing', email: 'user@example.com', active: true, spreadsheet_id: '' } }) },
+      fetchImpl: () => response(200, {}),
+    })
+    sandbox.setupSheets = vi.fn()
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Sheet' }))
+    sandbox.shareWithScriptIdentity = vi.fn()
+    sandbox.accountToken = vi.fn(() => 'token123456789')
+    const result = sandbox.inviteAccount({ spreadsheet_id: 'sheet-1', google_access_token: 'token', email: 'user@example.com' }, { email: 'owner@example.com', sub: 'owner' })
+    expect(result.existing_account).toBeUndefined()
+    expect(result.invite_code).toBeTruthy()
+    expect(sandbox.shareWithScriptIdentity).toHaveBeenCalledWith('sheet-1', 'token')
+    expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS').existing.spreadsheet_id).toBe('')
+  })
+
+  it('revokes an account only when it belongs to the owner-selected Sheet', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ existing: { username: 'existing', email: 'user@example.com', active: true, spreadsheet_id: 'sheet-1' } }) },
+      fetchImpl: () => response(200, {}),
+    })
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Sheet' }))
+    expect(sandbox.revokeAccount({ spreadsheet_id: 'sheet-1', username: 'existing', google_access_token: 'token' }, { email: 'owner@example.com' })).toEqual({ status: 'ok', revoked: true })
+    expect(sandbox.accountStore('PETCARE_ACCOUNT_USERS').existing).toMatchObject({ active: false, status: 'revoked' })
+  })
+
+  it('cancels a pending invite idempotently and scopes it to the verified owner Sheet', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({ __invite__CODE123: { email: 'user@example.com', spreadsheet_id: 'sheet-1', owner_email: 'owner@example.com' } }) },
+      fetchImpl: () => response(200, {}),
+    })
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Sheet' }))
+    expect(sandbox.cancelInvite({ spreadsheet_id: 'sheet-1', invite_code: 'code123', google_access_token: 'token' }, { email: 'owner@example.com' })).toEqual({ status: 'ok', cancelled: true })
+    expect(sandbox.cancelInvite({ spreadsheet_id: 'sheet-1', invite_code: 'code123', google_access_token: 'token' }, { email: 'owner@example.com' })).toEqual({ status: 'ok', cancelled: true, already_removed: true })
+  })
+  it('removes an active account or pending invite by verified email without relying on member-list state', () => {
+    const { sandbox } = makeGasSandbox({
+      properties: { PETCARE_ACCOUNT_USERS: JSON.stringify({
+        active: { username: 'active', email: 'user@example.com', active: true, spreadsheet_id: 'sheet-1' },
+        __invite__CODE123: { email: 'pending@example.com', spreadsheet_id: 'sheet-1', owner_email: 'owner@example.com' },
+      }) },
+      fetchImpl: () => response(200, {}),
+    })
+    sandbox.getGoogleOwnedSpreadsheet = vi.fn(() => ({ id: 'sheet-1', name: 'Sheet' }))
+    expect(sandbox.removeAccountAccess({ spreadsheet_id: 'sheet-1', email: 'user@example.com' }, { email: 'owner@example.com' })).toMatchObject({ account_removed: true })
+    expect(sandbox.removeAccountAccess({ spreadsheet_id: 'sheet-1', email: 'pending@example.com' }, { email: 'owner@example.com' })).toMatchObject({ invite_cancelled: true })
+    expect(sandbox.removeAccountAccess({ spreadsheet_id: 'sheet-1', email: 'pending@example.com' }, { email: 'owner@example.com' })).toMatchObject({ already_removed: true })
+  })
   it('turns an invited Google email into a real PetCare account with Sheet access', () => {
     const { sandbox } = makeGasSandbox({
       properties: {
@@ -57,7 +156,7 @@ describe('GAS security behavior', () => {
     const { sandbox } = makeGasSandbox({
       properties: {
         PETCARE_ACCOUNT_USERS: JSON.stringify({
-          existing: { username: 'existing', email: 'user@example.com', role: 'user', spreadsheet_id: '', active: true },
+          existing: { username: 'existing', email: 'user@example.com', role: 'user', spreadsheet_id: '', active: true, google_sub: 'google-user' },
           __invite__CODE123: { email: 'user@example.com', role: 'user', spreadsheet_id: 'sheet-shared', owner_email: 'owner@example.com' },
         }),
       },
@@ -78,6 +177,34 @@ describe('GAS security behavior', () => {
     expect(sandbox.SHEETS.app_state).toEqual(['key', 'value', 'updated_at'])
     expect(sandbox.SHEETS.tracking_items).toContain('id')
     expect(sandbox.SHEETS.symptom_logs).toContain('tracking_snapshot_json')
+  })
+
+  it('writes normalized account state only to the explicitly assigned spreadsheet context', () => {
+    const { sandbox } = makeGasSandbox()
+    const makeSheet = headers => {
+      const rows = [headers.slice()]
+      return {
+        getLastRow: () => rows.length,
+        getLastColumn: () => headers.length,
+        getRange: (row, column, rowCount, columnCount) => ({
+          getValues: () => rows.slice(row - 1, row - 1 + rowCount).map(item => item.slice(column - 1, column - 1 + columnCount)),
+          clearContent: () => { rows.splice(row - 1, rowCount) },
+          setValues: values => values.forEach((value, index) => { rows[row - 1 + index] = value.slice() }),
+        }),
+      }
+    }
+    const makeSpreadsheet = () => ({ sheets: Object.fromEntries(Object.entries(sandbox.SHEETS).map(([name, headers]) => [name, makeSheet(headers)])), getSheetByName(name) { return this.sheets[name] } })
+    const first = makeSpreadsheet(); const second = makeSpreadsheet()
+    sandbox.accountWriteNormalizedState({ pets: [{ id: 'only-first', name: 'Mochi' }] }, first)
+    expect(first.getSheetByName('pets').getRange(1, 1, 2, 2).getValues()[1][0]).toBe('only-first')
+    expect(second.getSheetByName('pets').getRange(1, 1, 1, 2).getValues()).toEqual([sandbox.SHEETS.pets.slice(0, 2)])
+    const source = readFileSync(path.resolve('gas', 'Code.gs'), 'utf8')
+    const writer = source.slice(source.indexOf('function accountWriteNormalizedState'), source.indexOf('function accountReadState'))
+    expect(writer).toMatch(/function accountWriteNormalizedState\(state, spreadsheet\)/)
+    expect(writer).not.toContain('getSheet(name)')
+    expect(writer).not.toContain('appendRow')
+    expect(writer).toContain('clearContent()')
+    expect(writer).toContain('setValues(plan.rows)')
   })
 
   it('sets up the verified Sheet by id before publishing the per-LINE-user mapping', () => {

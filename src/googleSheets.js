@@ -226,7 +226,7 @@ function rowObject(headers, values) {
 }
 
 function normalizedRowsFromState(state, timestamp = new Date().toISOString()) {
-  const pets = (state.pets || []).map(pet => ({
+  const pets = (state.pets || []).filter(pet => !pet.demo).map(pet => ({
     ...pet,
     active: pet.active === undefined ? true : pet.active,
     order: pet.order ?? '',
@@ -603,7 +603,7 @@ export async function savePetCareState(accessToken, spreadsheetId, state) {
     activePetId: state.activePetId || '',
   })
   data.push({ range: 'app_state!A2:C2', majorDimension: 'ROWS', values: [[legacy.key, legacy.value, legacy.updated_at]] })
-  data.push({ range: 'app_state!A3:C3', majorDimension: 'ROWS', values: [['account_state', JSON.stringify({ tracks: state.tracks || [], logs: state.logs || [], activities: state.activities || [], reminders: state.reminders || [], symptoms: state.symptoms || [], pets: state.pets || [], treatmentHistory: state.treatmentHistory || [], lineRecipients: state.lineRecipients || [], activePetId: state.activePetId || '' }), legacy.updated_at]] })
+  data.push({ range: 'app_state!A3:C3', majorDimension: 'ROWS', values: [['account_state', JSON.stringify({ tracks: state.tracks || [], logs: state.logs || [], activities: state.activities || [], reminders: state.reminders || [], symptoms: state.symptoms || [], pets: (state.pets || []).filter(pet => !pet.demo), treatmentHistory: state.treatmentHistory || [], lineRecipients: state.lineRecipients || [], activePetId: state.activePetId || '' }), legacy.updated_at]] })
   await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
     method: 'POST',
     headers: authHeaders(accessToken),

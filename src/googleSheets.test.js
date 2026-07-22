@@ -251,6 +251,11 @@ describe('Google Sheet schema', () => {
     ]))
   })
 
+  it('never serializes the demo pet into normalized Google Sheet rows', () => {
+    const rows = serializeNormalizedState({ pets: [{ id: 'demo', demo: true }, { id: 'real', name: 'Mochi' }], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] }, '2026-07-17T00:00:00.000Z')
+    expect(rows.pets.map(row => row[0])).toEqual(['real'])
+  })
+
   it('writes normalized rows and the backward-compatible app_state in one authenticated batch', async () => {
     const fetchMock = vi.fn().mockImplementation((url) => ({
       ok: true,

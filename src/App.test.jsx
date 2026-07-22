@@ -17,11 +17,31 @@ describe('PetCare shell and restructuring', () => {
     expect(petLifeStage({ years: 9, months: 0, days: 0 }).key).toBe('senior')
   })
 
-  it('renders the four primary navigation destinations', () => {
+  it('renders all five primary navigation destinations', () => {
     render(<App />)
     for (const name of ['หน้าหลัก', 'สมุดบันทึก', 'ประวัติการรักษา', 'ตั้งค่า']) expect(screen.getByRole('button', { name })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'เตือน' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'เตือน' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'ไดอารี่' })).toBeNull()
+  })
+
+  it('keeps reader accounts read-only before local or outbox mutation', () => {
+    render(<App initialPage="track" accountSession={{ user: { role: 'reader' } }} />)
+    const add = document.querySelector('.add-button')
+    fireEvent.click(add)
+    expect(document.querySelector('.form-card')).toBeNull()
+    expect(window.localStorage.getItem('petcare.remote-outbox.v1')).toBeNull()
+  })
+
+  it('preserves an unsaved draft when moving between primary pages', () => {
+    render(<App initialPage="track" />)
+    fireEvent.click(document.querySelector('.add-button'))
+    const form = screen.getByRole('region', { name: 'ฟอร์มรายการติดตาม' })
+    const name = within(form).getByLabelText('ชื่อรายการ')
+    fireEvent.change(name, { target: { value: 'draft track' } })
+    fireEvent.click(screen.getByRole('button', { name: 'หน้าหลัก' }))
+    fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
+    expect(screen.getByRole('region', { name: 'ฟอร์มรายการติดตาม' })).toBeTruthy()
+    expect(screen.getByDisplayValue('draft track')).toBeTruthy()
   })
 
   it('groups daily logs, notes, activities, and Track tags once, then edits a log in-app', async () => {

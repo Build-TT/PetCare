@@ -38,7 +38,7 @@ describe('PetCare restructuring flows', () => {
     expect(screen.queryByLabelText('Google Sheet connection')).toBeNull()
   })
 
-  it('clears Track drafts when switching between main Track and Settings Tracking', () => {
+  it('preserves Track drafts when switching between main Track and Settings Tracking', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
@@ -48,18 +48,18 @@ describe('PetCare restructuring flows', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
     fireEvent.click(screen.getByRole('button', { name: /รายการที่ติดตาม/ }))
-    expect(screen.queryByRole('dialog', { name: 'ฟอร์มรายการติดตาม' })).toBeNull()
+    expect(screen.getByLabelText('ฟอร์มรายการติดตาม')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการติดตาม/ }))
-    expect(within(screen.getByRole('dialog', { name: 'ฟอร์มรายการติดตาม' })).getByLabelText('ชื่อรายการ').value).toBe('')
+    expect(within(screen.getByLabelText('ฟอร์มรายการติดตาม')).getByLabelText('ชื่อรายการ').value).toBe('main draft')
 
-    fireEvent.change(within(screen.getByRole('dialog', { name: 'ฟอร์มรายการติดตาม' })).getByLabelText('ชื่อรายการ'), { target: { value: 'settings draft' } })
+    fireEvent.change(within(screen.getByLabelText('ฟอร์มรายการติดตาม')).getByLabelText('ชื่อรายการ'), { target: { value: 'settings draft' } })
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
-    expect(screen.queryByRole('dialog', { name: 'ฟอร์มรายการติดตาม' })).toBeNull()
+    expect(screen.getByLabelText('ฟอร์มรายการติดตาม')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการติดตาม/ }))
-    expect(within(screen.getByLabelText('ฟอร์มรายการติดตาม')).getByLabelText('ชื่อรายการ').value).toBe('')
+    expect(within(screen.getByLabelText('ฟอร์มรายการติดตาม')).getByLabelText('ชื่อรายการ').value).toBe('settings draft')
   })
 
-  it('clears Symptom drafts when switching between main Track and Settings Symptoms', () => {
+  it('preserves Symptom drafts when switching between main Track and Settings Symptoms', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
@@ -69,15 +69,15 @@ describe('PetCare restructuring flows', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
     fireEvent.click(screen.getByRole('button', { name: 'จัดการอาการ' }))
-    expect(screen.queryByRole('dialog', { name: 'ฟอร์มจัดการอาการ' })).toBeNull()
+    expect(screen.getByLabelText('ฟอร์มจัดการอาการ')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มอาการ/ }))
-    expect(within(screen.getByRole('dialog', { name: 'ฟอร์มจัดการอาการ' })).getByLabelText('ชื่ออาการ').value).toBe('')
+    expect(within(screen.getByLabelText('ฟอร์มจัดการอาการ')).getByLabelText('ชื่ออาการ').value).toBe('main symptom draft')
 
-    fireEvent.change(within(screen.getByRole('dialog', { name: 'ฟอร์มจัดการอาการ' })).getByLabelText('ชื่ออาการ'), { target: { value: 'settings symptom draft' } })
+    fireEvent.change(within(screen.getByLabelText('ฟอร์มจัดการอาการ')).getByLabelText('ชื่ออาการ'), { target: { value: 'settings symptom draft' } })
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
-    expect(screen.queryByRole('dialog', { name: 'ฟอร์มเพิ่มอาการ' })).toBeNull()
+    expect(screen.getByLabelText('ฟอร์มเพิ่มอาการ')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มอาการ/ }))
-    expect(within(screen.getByLabelText('ฟอร์มเพิ่มอาการ')).getByLabelText('ชื่ออาการ').value).toBe('')
+    expect(within(screen.getByLabelText('ฟอร์มเพิ่มอาการ')).getByLabelText('ชื่ออาการ').value).toBe('settings symptom draft')
   })
 
   it('uses Track selections as a per-log snapshot without changing active metadata', async () => {

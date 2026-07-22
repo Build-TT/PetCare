@@ -17,6 +17,10 @@ export default [
     ignores: [
       'dist',
       'node_modules',
+      '.agents/**',
+      '.codex/**',
+      'agents/**',
+      'AGENTS.md',
       'src/liff/**',
       'src/components/BottomNav.jsx',
       'src/components/LangToggle.jsx',

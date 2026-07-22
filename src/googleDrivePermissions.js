@@ -27,6 +27,15 @@ export async function grantSheetAccess(accessToken, spreadsheetId, emailAddress,
   const email = String(emailAddress || '').trim().toLowerCase()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('กรุณากรอกอีเมลที่ถูกต้อง')
   if (!['reader', 'writer'].includes(role)) throw new Error('สิทธิ์ไม่ถูกต้อง')
+  const existing = (await listSheetPermissions(accessToken, spreadsheetId)).find(permission =>
+    permission.type === 'user' && String(permission.emailAddress || '').toLowerCase() === email
+  )
+  if (existing?.role === role || existing?.role === 'owner') return existing
+  if (existing?.id) {
+    return driveFetch(`${DRIVE_API}/files/${encodeURIComponent(spreadsheetId)}/permissions/${encodeURIComponent(existing.id)}`, {
+      method: 'PATCH', headers: headers(accessToken), body: JSON.stringify({ role }),
+    })
+  }
   return driveFetch(`${DRIVE_API}/files/${encodeURIComponent(spreadsheetId)}/permissions?sendNotificationEmail=true`, {
     method: 'POST', headers: headers(accessToken), body: JSON.stringify({ type: 'user', role, emailAddress: email }),
   })

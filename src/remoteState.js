@@ -16,7 +16,7 @@ export function selectPersistedState(state) {
     activities: state.activities || [],
     reminders: state.reminders || [],
     symptoms: state.symptoms || [],
-    pets: state.pets || [],
+    pets: (state.pets || []).filter(pet => !pet.demo),
     treatmentHistory: state.treatmentHistory || [],
     lineRecipients: state.lineRecipients || [],
     activePetId: state.activePetId || '',

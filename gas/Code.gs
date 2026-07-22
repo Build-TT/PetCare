@@ -56,7 +56,8 @@ var LINE_GROUP_SELECTIONS_PROPERTY = 'PETCARE_LINE_GROUP_SELECTIONS'
 var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 var ACCOUNT_USERS_PROPERTY = 'PETCARE_ACCOUNT_USERS'
 var ACCOUNT_SESSIONS_PROPERTY = 'PETCARE_ACCOUNT_SESSIONS'
-var PETCARE_BACKEND_VERSION = '2026.07.23.1'
+var ACCOUNT_THROTTLE_PROPERTY = 'PETCARE_ACCOUNT_LOGIN_THROTTLE'
+var PETCARE_BACKEND_VERSION = '2026.07.23.2'
 var CURRENT_ACCOUNT_USER = null
 
 var DEFAULT_LOG_TYPES = [
@@ -255,9 +256,27 @@ function accountStore(key) {
   try { return JSON.parse(props.getProperty(key) || '{}') || {} } catch (err) { return {} }
 }
 function saveAccountStore(key, value) { PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(value)) }
-function accountHash(password, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(salt) + ':' + String(password))) }
+function withAccountLock(work) {
+  if (typeof LockService === 'undefined' || !LockService.getScriptLock) return work()
+  var lock = LockService.getScriptLock()
+  if (!lock.tryLock(5000)) throw new Error('Account service is busy; please retry')
+  try { return work() } finally { lock.releaseLock() }
+}
+function accountHashLegacy(password, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(salt) + ':' + String(password))) }
+function accountHash(password, salt) {
+  var value = String(salt) + ':' + String(password)
+  for (var i = 0; i < 10000; i++) value = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value))
+  return value
+}
+function accountPasswordMatches(user, password) {
+  var candidate = String(password || '')
+  if (user.hash_version === 2 && accountHash(candidate, user.salt) === user.password_hash) return true
+  return accountHashLegacy(candidate, user.salt) === user.password_hash
+}
+function accountRole(value) { return String(value || 'writer').toLowerCase() === 'reader' ? 'reader' : 'writer' }
+function accountCanWrite(user) { return accountRole(user && user.role) !== 'reader' }
 function accountToken() { return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '') }
-function accountPublic(user) { return { username: user.username, email: user.email || '', name: user.name || '', surname: user.surname || '', role: user.role || 'user', spreadsheet_id: user.spreadsheet_id || '', status: user.status || 'active' } }
+function accountPublic(user) { return { username: user.username, email: user.email || '', name: user.name || '', surname: user.surname || '', role: accountRole(user.role), spreadsheet_id: user.spreadsheet_id || '', status: user.status || 'active' } }
 function accountUsername(value) {
   var username = String(value || '').trim().toLowerCase()
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new Error('Username ต้องมี 3-40 ตัว และใช้ a-z, 0-9, จุด, ขีดกลาง หรือขีดล่าง')
@@ -277,7 +296,7 @@ function newAccountSession(user) {
   saveAccountStore(ACCOUNT_SESSIONS_PROPERTY, sessions)
   return { status: 'ok', session_token: token, expires_at: sessions[token].expires_at, user: accountPublic(user) }
 }
-function registerAccount(p) {
+function registerAccountUnsafe(p) {
   var username = accountUsername(p.username), password = String(p.password || ''), email = String(p.email || '').trim().toLowerCase()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('Email is required and must be valid')
   if (password.length < 8) throw new Error('Password ต้องมีอย่างน้อย 8 ตัวอักษร')
@@ -286,26 +305,38 @@ function registerAccount(p) {
   if (users[username]) throw new Error('Username นี้ถูกใช้งานแล้ว')
   var inviteCode = String(p.invite_code || '').trim().toUpperCase(), invite = inviteCode ? users['__invite__' + inviteCode] : null
   if (inviteCode && !invite) throw new Error('Invite code ไม่ถูกต้องหรือหมดอายุ')
+  if (invite && String(invite.email || '').toLowerCase() !== email) throw new Error('Invite code does not match the submitted email')
   var salt = accountToken().slice(0, 24)
-  var user = { username: username, email: String(p.email || invite?.email || '').trim().toLowerCase(), name: String(p.name).trim(), surname: String(p.surname).trim(), role: invite?.role || 'user', spreadsheet_id: invite?.spreadsheet_id || '', active: true, salt: salt, password_hash: accountHash(password, salt), created_at: nowIso(), updated_at: nowIso() }
+  var user = { username: username, email: email, name: String(p.name).trim(), surname: String(p.surname).trim(), role: accountRole(invite?.role), spreadsheet_id: invite?.spreadsheet_id || '', active: true, salt: salt, password_hash: accountHash(password, salt), hash_version: 2, created_at: nowIso(), updated_at: nowIso() }
   users[username] = user; if (invite) delete users['__invite__' + inviteCode]; saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
   return newAccountSession(user)
 }
-function loginAccount(p) {
+function registerAccount(p) { return withAccountLock(function () { return registerAccountUnsafe(p) }) }
+function loginAccountUnsafe(p) {
   var username = accountUsername(p.username), user = accountStore(ACCOUNT_USERS_PROPERTY)[username]
-  if (!user || user.active === false || accountHash(String(p.password || ''), user.salt) !== user.password_hash) throw new Error('Username หรือ Password ไม่ถูกต้อง')
+  var throttle = accountStore(ACCOUNT_THROTTLE_PROPERTY), state = throttle[username] || { failures: 0, locked_until: 0 }
+  if (Number(state.locked_until || 0) > new Date().getTime()) throw new Error('เข้าสู่ระบบชั่วคราวถูกระงับ กรุณาลองใหม่ภายหลัง')
+  if (!user || user.active === false || !accountPasswordMatches(user, p.password)) {
+    state.failures = Number(state.failures || 0) + 1
+    if (state.failures >= 5) { state.locked_until = new Date().getTime() + 15 * 60 * 1000; state.failures = 0 }
+    throttle[username] = state; saveAccountStore(ACCOUNT_THROTTLE_PROPERTY, throttle)
+    throw new Error('Username หรือ Password ไม่ถูกต้อง')
+  }
+  delete throttle[username]; saveAccountStore(ACCOUNT_THROTTLE_PROPERTY, throttle)
+  if (user.hash_version !== 2) { user.password_hash = accountHash(String(p.password || ''), user.salt); user.hash_version = 2; var users = accountStore(ACCOUNT_USERS_PROPERTY); users[username] = user; saveAccountStore(ACCOUNT_USERS_PROPERTY, users) }
   return newAccountSession(user)
 }
+function loginAccount(p) { return withAccountLock(function () { return loginAccountUnsafe(p) }) }
 function googleAccountUsername(users) {
   var username = 'google-' + accountToken().slice(0, 12).toLowerCase()
   while (users[username]) username = 'google-' + accountToken().slice(0, 12).toLowerCase()
   return username
 }
-function googleLoginAccount(p) {
+function googleLoginAccountUnsafe(p) {
   var google = verifyGoogleIdentity(p.google_access_token), users = accountStore(ACCOUNT_USERS_PROPERTY), user = null, key = ''
   Object.keys(users).some(function (candidate) {
     if (candidate.indexOf('__invite__') === 0) return false
-    if (String(users[candidate].email || '').toLowerCase() === google.email) { key = candidate; user = users[candidate]; return true }
+    if (String(users[candidate].email || '').toLowerCase() === google.email && String(users[candidate].google_sub || '') === String(google.sub || '')) { key = candidate; user = users[candidate]; return true }
     return false
   })
   if (!user) {
@@ -313,7 +344,7 @@ function googleLoginAccount(p) {
       var invite = users[candidate]
       if (candidate.indexOf('__invite__') === 0 && String(invite.email || '').toLowerCase() === google.email) {
         key = googleAccountUsername(users)
-        user = { username: key, email: google.email, name: '', surname: '', role: invite.role || 'user', spreadsheet_id: invite.spreadsheet_id || '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
+        user = { username: key, email: google.email, name: '', surname: '', role: accountRole(invite.role), spreadsheet_id: invite.spreadsheet_id || '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
         delete users[candidate]
         return true
       }
@@ -325,7 +356,7 @@ function googleLoginAccount(p) {
       var invite = users[candidate]
       if (candidate.indexOf('__invite__') === 0 && String(invite.email || '').toLowerCase() === google.email) {
         user.spreadsheet_id = invite.spreadsheet_id || ''
-        user.role = invite.role || user.role || 'user'
+        user.role = accountRole(invite.role || user.role)
         user.updated_at = nowIso()
         delete users[candidate]
         return true
@@ -335,28 +366,67 @@ function googleLoginAccount(p) {
   }
   if (!user) {
     key = googleAccountUsername(users)
-    user = { username: key, email: google.email, name: '', surname: '', role: 'user', spreadsheet_id: '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
+    user = { username: key, email: google.email, name: '', surname: '', role: 'writer', spreadsheet_id: '', active: true, google_sub: google.sub, salt: '', password_hash: '', created_at: nowIso(), updated_at: nowIso() }
   }
   user.google_sub = google.sub
   users[key] = user
   saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
   return newAccountSession(user)
 }
-function inviteAccount(p, google) {
+function googleLoginAccount(p) { return withAccountLock(function () { return googleLoginAccountUnsafe(p) }) }
+function inviteAccountUnsafe(p, google) {
   var spreadsheetId = String(p.spreadsheet_id || '').trim()
   if (!spreadsheetId) throw new Error('Google Sheet ID is required')
-  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email)
-  setupSheets(file.id)
-  var users = accountStore(ACCOUNT_USERS_PROPERTY), code = accountToken().slice(0, 12).toUpperCase()
   var inviteEmail = String(p.email || '').trim().toLowerCase()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(inviteEmail)) throw new Error('Invite email is invalid')
-  users['__invite__' + code] = { email: inviteEmail, role: String(p.role || 'user'), spreadsheet_id: file.id, owner_email: google.email, app_url: String(p.app_url || ''), created_at: nowIso() }
-  saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email)
+  shareWithScriptIdentity(file.id, p.google_access_token)
+  setupSheets(file.id)
+  var users = accountStore(ACCOUNT_USERS_PROPERTY), code = '', existing = null
+  Object.keys(users).some(function (key) {
+    if (key.indexOf('__invite__') === 0) return false
+    var candidate = users[key]
+    if (String(candidate.email || '').toLowerCase() !== inviteEmail) return false
+    if (!candidate.google_sub) return false
+    existing = candidate
+    if (candidate.spreadsheet_id && String(candidate.spreadsheet_id) !== file.id) throw new Error('PetCare account is already linked to a different Google Sheet')
+    candidate.spreadsheet_id = file.id
+    candidate.role = accountRole(p.role)
+    candidate.active = candidate.active !== false
+    candidate.updated_at = nowIso()
+    return true
+  })
+  if (existing) {
+    saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+    return { status: 'ok', spreadsheet_id: file.id, existing_account: true, role: accountRole(existing.role), email_sent: false, message: 'PetCare account already exists and is now linked to this Sheet' }
+  }
+  Object.keys(users).some(function (key) {
+    var pending = users[key]
+    if (key.indexOf('__invite__') === 0 && String(pending.email || '').toLowerCase() === inviteEmail && String(pending.spreadsheet_id || '') === file.id) {
+      code = key.slice('__invite__'.length)
+      return true
+    }
+    return false
+  })
+  if (!code) {
+    code = accountToken().slice(0, 12).toUpperCase()
+    users['__invite__' + code] = { email: inviteEmail, role: accountRole(p.role), spreadsheet_id: file.id, owner_email: google.email, app_url: String(p.app_url || ''), created_at: nowIso() }
+    saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  }
   var inviteUrl = String(p.app_url || '').replace(/\/$/, '')
   var body = 'You have been invited to PetCare.\n\nEmail: ' + inviteEmail + '\nInvite code: ' + code + '\n\nOpen PetCare: ' + (inviteUrl || 'the PetCare website') + '\n\nIf you use Google, choose Login with Google using this email. Otherwise choose Register and enter the Invite code.'
-  if (typeof MailApp !== 'undefined') MailApp.sendEmail(inviteEmail, 'PetCare invitation', body)
-  return { status: 'ok', invite_code: code, spreadsheet_id: file.id, email_sent: typeof MailApp !== 'undefined' }
+  var emailSent = false, emailError = ''
+  try {
+    if (typeof MailApp === 'undefined') throw new Error('MailApp is unavailable')
+    MailApp.sendEmail(inviteEmail, 'PetCare invitation', body)
+    emailSent = true
+  } catch (err) {
+    emailError = 'Invitation email could not be sent; share the Invite code manually.'
+    Logger.log('PetCare invite email failed: ' + (err && err.message ? err.message : err))
+  }
+  return { status: 'ok', invite_code: code, spreadsheet_id: file.id, email_sent: emailSent, email_error: emailError }
 }
+function inviteAccount(p, google) { return withAccountLock(function () { return inviteAccountUnsafe(p, google) }) }
 function accountMembers(p, google) {
   var spreadsheetId = String(p.spreadsheet_id || '').trim()
   if (!spreadsheetId) throw new Error('Google Sheet ID is required')
@@ -364,32 +434,125 @@ function accountMembers(p, google) {
   Object.keys(users).forEach(function (key) {
     var user = users[key]
     if (key.indexOf('__invite__') === 0) {
-      if (String(user.spreadsheet_id || '') === file.id && String(user.owner_email || '').toLowerCase() === google.email) members.push({ email: user.email || '', role: user.role || 'user', spreadsheet_id: file.id, status: 'pending' })
+      if (String(user.spreadsheet_id || '') === file.id && String(user.owner_email || '').toLowerCase() === google.email) members.push({ email: user.email || '', role: accountRole(user.role), spreadsheet_id: file.id, invite_code: key.slice('__invite__'.length), status: 'pending' })
       return
     }
     if (String(user.spreadsheet_id || '') === file.id) members.push(accountPublic(user))
   })
   return { status: 'ok', members: members }
 }
+function revokeAccountUnsafe(p, google) {
+  var spreadsheetId = String(p.spreadsheet_id || '').trim()
+  var username = String(p.username || '').trim().toLowerCase()
+  if (!spreadsheetId || !username) throw new Error('Google Sheet ID and PetCare username are required')
+  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email), users = accountStore(ACCOUNT_USERS_PROPERTY), user = users[username]
+  if (user && String(user.spreadsheet_id || '') === file.id) {
+    user.active = false
+    user.status = 'revoked'
+    user.updated_at = nowIso()
+    saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+    return { status: 'ok', revoked: true }
+  }
+  throw new Error('PetCare account not found for this Sheet')
+}
+function revokeAccount(p, google) { return withAccountLock(function () { return revokeAccountUnsafe(p, google) }) }
+function removeAccountAccessUnsafe(p, google) {
+  var spreadsheetId = String(p.spreadsheet_id || '').trim(), email = String(p.email || '').trim().toLowerCase()
+  if (!spreadsheetId || !email) throw new Error('Google Sheet ID and account email are required')
+  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email), users = accountStore(ACCOUNT_USERS_PROPERTY), account = null, inviteKey = ''
+  Object.keys(users).some(function (key) {
+    var value = users[key]
+    if (key.indexOf('__invite__') === 0) {
+      if (String(value.email || '').toLowerCase() === email && String(value.spreadsheet_id || '') === file.id && String(value.owner_email || '').toLowerCase() === String(google.email || '').toLowerCase()) inviteKey = key
+      return false
+    }
+    if (String(value.email || '').toLowerCase() === email && String(value.spreadsheet_id || '') === file.id && value.active !== false) { account = value; return false }
+    return false
+  })
+  var accountRemoved = false, inviteCancelled = false
+  if (account) {
+    account.active = false; account.status = 'revoked'; account.updated_at = nowIso(); accountRemoved = true
+  }
+  if (inviteKey) { delete users[inviteKey]; inviteCancelled = true }
+  if (accountRemoved || inviteCancelled) saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  return { status: 'ok', account_removed: accountRemoved, invite_cancelled: inviteCancelled, already_removed: !accountRemoved && !inviteCancelled }
+}
+function removeAccountAccess(p, google) { return withAccountLock(function () { return removeAccountAccessUnsafe(p, google) }) }
+function cancelInviteUnsafe(p, google) {
+  var spreadsheetId = String(p.spreadsheet_id || '').trim(), code = String(p.invite_code || '').trim().toUpperCase()
+  if (!spreadsheetId || !code) throw new Error('Google Sheet ID and invite code are required')
+  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email), users = accountStore(ACCOUNT_USERS_PROPERTY), key = '__invite__' + code, invite = users[key]
+  if (!invite || String(invite.spreadsheet_id || '') !== file.id || String(invite.owner_email || '').toLowerCase() !== google.email) return { status: 'ok', cancelled: true, already_removed: true }
+  delete users[key]; saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  return { status: 'ok', cancelled: true }
+}
+function cancelInvite(p, google) { return withAccountLock(function () { return cancelInviteUnsafe(p, google) }) }
 function accountStateSheet() {
   if (!CURRENT_ACCOUNT_USER.spreadsheet_id) throw new Error('บัญชีนี้ยังไม่ได้รับสิทธิ์ Google Sheet')
   setupSheets(CURRENT_ACCOUNT_USER.spreadsheet_id)
   return SpreadsheetApp.openById(CURRENT_ACCOUNT_USER.spreadsheet_id).getSheetByName('app_state')
 }
+function accountStateTimestamp(state) { return nowIso() }
+function accountStateObjects(state, timestamp) {
+  state = state || {}
+  var pets = (state.pets || []).filter(function (p) { return !p.demo })
+  var tracks = state.tracks || [], versions = []
+  tracks.forEach(function (track) {
+    var history = Array.isArray(track.versions) && track.versions.length ? track.versions : [{ id: track.version_id || track.id + '_current', name: track.version_name || track.name, dose: track.dose || '', schedule_type: track.schedule_type || 'display', schedule_config: track.schedule_config || { display: track.schedule || '' }, active: track.version_active !== false, created_at: track.version_created_at || timestamp, updated_at: track.version_updated_at || timestamp }]
+    history.forEach(function (version) { versions.push({ id: version.id, tracking_item_id: track.id, pet_id: track.pet_id || '', name: version.name || track.name || '', dose: version.dose || '', schedule_type: version.schedule_type || 'display', schedule_config: JSON.stringify(version.schedule_config || {}), start_at: version.start_at || '', end_at: version.end_at || '', active: version.active !== false, created_at: version.created_at || timestamp, updated_at: version.updated_at || timestamp }) })
+  })
+  return {
+    pets: pets.map(function (p) { return { id: p.id, name: p.name || '', species: p.species || '', gender: p.gender || '', breed: p.breed || '', birthdate: p.birthdate || '', photo: p.photo || '', color: p.color || '', active: p.active !== false, order: p.order || '', created_at: p.created_at || timestamp } }),
+    tracking_items: tracks.map(function (t) { return { id: t.id, pet_id: t.pet_id || '', name: t.name || '', active: t.active !== false, created_at: t.created_at || timestamp, updated_at: t.updated_at || timestamp } }),
+    tracking_versions: versions,
+    symptom_catalog: (state.symptoms || []).map(function (s) { return { id: s.id, pet_id: s.pet_id || '', label_th: s.label_th || s.label || '', label_en: s.label_en || '', active: s.active !== false, created_at: s.created_at || timestamp, updated_at: s.updated_at || timestamp } }),
+    symptom_logs: (state.logs || []).filter(function (l) { return String(l.symptom || l.diary || l.diary_text || '').trim() }).map(function (l) { return { id: l.id, pet_id: l.pet_id || '', occurred_at: l.datetime || l.occurred_at || '', symptoms_json: JSON.stringify(l.symptoms || (l.symptom ? [l.symptom] : [])), diary_text: l.diary || l.diary_text || '', tracking_snapshot_json: JSON.stringify(l.tracks || []), created_at: l.created_at || timestamp, updated_at: l.updated_at || timestamp } }),
+    diary_logs: (state.logs || []).filter(function (l) { return String(l.diary || l.diary_text || '').trim() }).map(function (l) { return { id: l.id, pet_id: l.pet_id || '', occurred_at: l.datetime || l.occurred_at || '', text: l.diary || l.diary_text || '', created_at: l.created_at || timestamp, updated_at: l.updated_at || timestamp } }),
+    activity_logs: (state.activities || []).map(function (a) { return { id: a.id, pet_id: a.pet_id || '', activity_type: a.activity_type || a.symptom || '', occurred_at: a.datetime || a.occurred_at || '', duration_minutes: a.duration_minutes || '', weight_kg: a.weight_kg || '', note: a.note || a.diary || '', created_at: a.created_at || timestamp, updated_at: a.updated_at || timestamp } }),
+    treatment_history: (state.treatmentHistory || []).map(function (t) { return { id: t.id, pet_id: t.pet_id || '', category: t.category || '', title: t.title || '', started_at: t.started_at || '', ended_at: t.ended_at || '', clinic: t.clinic || '', doctor: t.doctor || '', note: t.note || '', created_at: t.created_at || timestamp, updated_at: t.updated_at || timestamp } }),
+    reminders: (state.reminders || []).map(function (r) { return { id: r.id, pet_id: r.pet_id || '', type: r.type || 'main_app', title: r.title || '', schedule_type: r.schedule_type || 'display', schedule_config: JSON.stringify(r.schedule_config || { detail: r.detail || '' }), start_at: r.start_at || '', end_at: r.end_at || '', active: r.enabled !== undefined ? r.enabled : r.active !== false, created_at: r.created_at || timestamp, updated_at: r.updated_at || timestamp } }),
+    reminder_recipients: (state.lineRecipients || []).filter(function (r) { return r.recipient_id }).map(function (r) { return { id: r.id, reminder_id: r.reminder_id || '*', recipient_id: r.recipient_id, created_at: r.created_at || timestamp } }),
+  }
+}
+function accountWriteNormalizedState(state, spreadsheet) {
+  if (!spreadsheet || typeof spreadsheet.getSheetByName !== 'function') throw new Error('Account spreadsheet context is required')
+  var objects = accountStateObjects(state, nowIso()), plans = Object.keys(objects).map(function (name) {
+    var sh = spreadsheet.getSheetByName(name)
+    if (!sh) throw new Error('ไม่พบชีต ' + name + ' — รัน setupSheets() ก่อน')
+    var headers = readHeaders(sh), rows = objects[name].map(function (object) { return headers.map(function (header) { var value = object[header]; return typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : (value === undefined || value === null ? '' : value) }) })
+    return { sh: sh, headers: headers, rows: rows }
+  })
+  plans.forEach(function (plan) {
+    var managedRows = Math.max(plan.sh.getLastRow() - 1, 0)
+    if (managedRows > 0) plan.sh.getRange(2, 1, managedRows, plan.headers.length).clearContent()
+    if (plan.rows.length > 0) plan.sh.getRange(2, 1, plan.rows.length, plan.headers.length).setValues(plan.rows)
+  })
+}
 function accountReadState() {
   var rows = accountStateSheet().getDataRange().getValues()
   for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state' && rows[i][1]) {
-    try { return { status: 'ok', state: JSON.parse(rows[i][1]) } } catch (err) { return { status: 'ok', state: null } }
+    try {
+      var state = JSON.parse(rows[i][1])
+      if (state && Array.isArray(state.pets)) state.pets = state.pets.filter(function (pet) { return !pet.demo })
+      return { status: 'ok', state: state }
+    } catch (err) { return { status: 'ok', state: null } }
   }
   return { status: 'ok', state: null }
 }
-function accountSaveState(state) {
+function accountSaveStateUnsafe(state) {
+  if (!accountCanWrite(CURRENT_ACCOUNT_USER)) throw new Error('บัญชีนี้มีสิทธิ์อ่านอย่างเดียว ไม่สามารถบันทึกข้อมูลได้')
+  setupSheets(CURRENT_ACCOUNT_USER.spreadsheet_id)
+  var accountSpreadsheet = SpreadsheetApp.openById(CURRENT_ACCOUNT_USER.spreadsheet_id)
+  accountWriteNormalizedState(state, accountSpreadsheet)
   var sh = accountStateSheet(), rows = sh.getDataRange().getValues(), row = -1
   for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state') { row = i + 1; break }
-  var values = [['account_state', JSON.stringify(state || {}), nowIso()]]
+  var persistedState = state || {}
+  if (Array.isArray(persistedState.pets)) persistedState = Object.assign({}, persistedState, { pets: persistedState.pets.filter(function (pet) { return !pet.demo }) })
+  var values = [['account_state', JSON.stringify(persistedState), nowIso()]]
   if (row < 0) sh.getRange(sh.getLastRow() + 1, 1, 1, 3).setValues(values); else sh.getRange(row, 1, 1, 3).setValues(values)
   return { status: 'ok' }
 }
+function accountSaveState(state) { return withAccountLock(function () { return accountSaveStateUnsafe(state) }) }
 
 function doGet() {
   return json({ status: 'error', message: 'POST with a verified LINE access token is required' })
@@ -423,6 +586,9 @@ function doPost(e) {
     if (p.action === 'accountInvite') return json(inviteAccount(p, verifyGoogleIdentity(p.google_access_token)))
     if (p.action === 'accountGoogleLogin') return json(googleLoginAccount(p))
     if (p.action === 'accountMembers') return json(accountMembers(p, verifyGoogleIdentity(p.google_access_token)))
+    if (p.action === 'accountRevoke') return json(revokeAccount(p, verifyGoogleIdentity(p.google_access_token)))
+    if (p.action === 'accountRemoveAccess') return json(removeAccountAccess(p, verifyGoogleIdentity(p.google_access_token)))
+    if (p.action === 'accountCancelInvite') return json(cancelInvite(p, verifyGoogleIdentity(p.google_access_token)))
     if (p.action === 'appVersion') return json({ status: 'ok', version: PETCARE_BACKEND_VERSION })
     if (p.action === 'accountReadSession') return json({ status: 'ok', user: accountPublic(verifyAccountSession(p.session_token)) })
     if (p.action === 'accountReadState' || p.action === 'accountSaveState') {
