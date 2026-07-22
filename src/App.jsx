@@ -230,9 +230,12 @@ function migrateLegacyOwners(state) {
   }), { ...state })
 }
 
-function App({ initialPage = 'home' }) {
+function App({ initialPage = 'home', accountSession = null }) {
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
-  const rememberedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
+  const storedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
+  const rememberedGoogleSheet = accountSession?.user?.username
+    ? (accountSession.user.spreadsheet_id ? { mode: 'account', spreadsheetId: accountSession.user.spreadsheet_id, email: accountSession.user.email, name: 'PetCare shared Sheet' } : null)
+    : storedGoogleSheet
   const hasRememberedGoogleSheet = Boolean(rememberedGoogleSheet?.spreadsheetId)
   const hasCompletedGoogleOnboarding = hasRememberedGoogleSheet
   const [page, setPage] = useState(MAIN_APP_PAGES.has(initialPage) ? initialPage : 'home')
@@ -266,7 +269,7 @@ function App({ initialPage = 'home' }) {
   // Keep non-secret Sheet metadata visible immediately after a refresh. The
   // OAuth token is deliberately not persisted; restoreGoogleConnection fills
   // it back in silently when Google's browser session is still valid.
-  const [googleConnection, setGoogleConnection] = useState(rememberedGoogleSheet ? { ...rememberedGoogleSheet } : null)
+  const [googleConnection, setGoogleConnection] = useState(rememberedGoogleSheet ? { ...rememberedGoogleSheet, ...(rememberedGoogleSheet.mode === 'account' ? { accountToken: accountSession?.session_token } : {}) } : null)
   const [showGoogleOnboarding, setShowGoogleOnboarding] = useState(!hasCompletedGoogleOnboarding)
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState('idle')
@@ -389,7 +392,7 @@ function App({ initialPage = 'home' }) {
       setSyncError('')
       const queuedSave = remoteSaveQueueRef.current
         .catch(() => undefined)
-        .then(() => saveRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, pendingState))
+        .then(() => saveRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, pendingState, googleConnection))
       remoteSaveQueueRef.current = queuedSave
       queuedSave
         .then(() => {
@@ -412,7 +415,7 @@ function App({ initialPage = 'home' }) {
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
     setRemoteReady(false)
     try {
-      const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId)
+      const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId, connection)
       const isNewSheet = connection.created === true
       const outbox = isNewSheet ? null : loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null)
       const pendingState = isNewSheet ? null : unwrapPendingState(outbox)
@@ -755,6 +758,11 @@ function App({ initialPage = 'home' }) {
     let cancelled = false
     const restoreGoogleConnection = async () => {
       try {
+        if (rememberedGoogleSheet?.mode === 'account') {
+          if (!accountSession?.session_token || !rememberedGoogleSheet.spreadsheetId) return
+          await handleGoogleConnected({ ...rememberedGoogleSheet, mode: 'account', accountToken: accountSession.session_token, accessToken: '' })
+          return
+        }
         const accessToken = await requestGoogleAccessToken({ prompt: 'none' })
         const profile = await getGoogleUserProfile(accessToken)
         if (cancelled) return

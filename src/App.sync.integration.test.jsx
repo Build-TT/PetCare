@@ -56,6 +56,10 @@ describe('App remote sync integration', () => {
     const connect = async () => {
       fireEvent.click(screen.getByRole('button', { name: /ตั้งค่า/ }))
       fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+      if (!screen.queryByRole('checkbox')) {
+        await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+        return
+      }
       fireEvent.click(screen.getByRole('checkbox'))
       fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
       await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())

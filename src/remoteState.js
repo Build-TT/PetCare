@@ -1,4 +1,5 @@
 import { loadPetCareState, savePetCareState } from './googleSheets.js'
+import { loadAccountState, saveAccountState } from './accountAuth.js'
 
 export function isCurrentRemoteRevision(currentRevision, requestRevision) {
   return currentRevision === requestRevision
@@ -33,10 +34,12 @@ export function hydrateRemoteState(remoteState, fallback, pendingState = null) {
   ]))
 }
 
-export async function loadRemoteState(accessToken, spreadsheetId) {
+export async function loadRemoteState(accessToken, spreadsheetId, connection = null) {
+  if (connection?.mode === 'account') return loadAccountState(connection.accountToken)
   return loadPetCareState(accessToken, spreadsheetId)
 }
 
-export async function saveRemoteState(accessToken, spreadsheetId, state) {
+export async function saveRemoteState(accessToken, spreadsheetId, state, connection = null) {
+  if (connection?.mode === 'account') return saveAccountState(connection.accountToken, selectPersistedState(state))
   return savePetCareState(accessToken, spreadsheetId, selectPersistedState(state))
 }

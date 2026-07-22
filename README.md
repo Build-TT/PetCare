@@ -53,6 +53,12 @@ Use a separate Google Cloud project and test account before enabling production 
 
 PetCare asks for consent before starting the Google authorization flow. It creates the user's Sheet automatically; customers do not need to create a blank file or paste a spreadsheet link. Local UI state, pending outbox data, and non-secret connection metadata are cached as described above. OAuth access tokens remain in memory for the active browser session.
 
+### PetCare accounts and shared Sheets
+
+The main web app now requires a PetCare account session. Customers can register with a username/password, or sign in with Google. A customer without Google can register with an Invite code created by an admin in `Settings > PetCare users`; that account reads and writes the assigned Sheet through the deployed Apps Script service and does not need a Google OAuth token. A new account without an assigned Sheet is shown the Google Sheet connection dialog. Account sessions are stored as a revocable, expiring token in Apps Script properties; passwords are stored only as salted SHA-256 hashes.
+
+After adding the account actions in `gas/Code.gs`, deploy a new Apps Script Web App version and keep its `/exec` URL in `VITE_GAS_URL`. Existing Google OAuth users continue to use the Google Sheets API directly; their Sheet metadata is remembered locally and can be changed from `Settings > Google Sheet`.
+
 ## LINE reminders
 
 LINE reminders require one LINE Messaging API channel configured by the system owner. Set `LINE_TOKEN`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_IDS`, `LINE_ADMIN_USER_IDS`, and `GAS_WEBHOOK_SECRET` once in the deployed Apps Script project; customers must never edit or receive these values. The web app asks each customer for Google consent and a valid LINE User ID, then calls the Google-authenticated `provisionUser` action. GAS verifies that the Google account owns the Sheet, grants the deployed script writer access, creates any missing schema tabs, and stores the LINE-user-to-Sheet mapping. Customers do not open Apps Script or paste a Sheet URL.

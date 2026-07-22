@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 describe('application root navigation', () => {
   it('mounts only the approved primary navigation', async () => {
     document.body.innerHTML = '<div id="root"></div>'
+    window.localStorage.setItem('petcare.account-session.v1', JSON.stringify({ session_token: 'test-session', user: { username: 'test', role: 'user' } }))
     window.history.replaceState({}, '', '/?page=settings')
 
     let appModule

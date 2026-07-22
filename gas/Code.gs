@@ -54,6 +54,9 @@ var LINE_CHANNEL_SECRET = 'LINE_CHANNEL_SECRET'
 var LINE_GROUPS_PROPERTY = 'PETCARE_LINE_GROUPS'
 var LINE_GROUP_SELECTIONS_PROPERTY = 'PETCARE_LINE_GROUP_SELECTIONS'
 var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
+var ACCOUNT_USERS_PROPERTY = 'PETCARE_ACCOUNT_USERS'
+var ACCOUNT_SESSIONS_PROPERTY = 'PETCARE_ACCOUNT_SESSIONS'
+var CURRENT_ACCOUNT_USER = null
 
 var DEFAULT_LOG_TYPES = [
   ['med',     'ให้ยา',       'Medicine', '💊', 'FALSE', 'TRUE', '1'],
@@ -246,6 +249,81 @@ function installReminderTrigger() {
 }
 
 // ── web app entrypoint ─────────────────────────────────────────────────────
+function accountStore(key) {
+  var props = PropertiesService.getScriptProperties()
+  try { return JSON.parse(props.getProperty(key) || '{}') || {} } catch (err) { return {} }
+}
+function saveAccountStore(key, value) { PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(value)) }
+function accountHash(password, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(salt) + ':' + String(password))) }
+function accountToken() { return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '') }
+function accountPublic(user) { return { username: user.username, email: user.email || '', name: user.name || '', surname: user.surname || '', role: user.role || 'user', spreadsheet_id: user.spreadsheet_id || '' } }
+function accountUsername(value) {
+  var username = String(value || '').trim().toLowerCase()
+  if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new Error('Username ต้องมี 3-40 ตัว และใช้ a-z, 0-9, จุด, ขีดกลาง หรือขีดล่าง')
+  return username
+}
+function verifyAccountSession(token) {
+  var sessions = accountStore(ACCOUNT_SESSIONS_PROPERTY), session = sessions[String(token || '')]
+  if (!session || Number(session.expires_at) < new Date().getTime()) throw new Error('Account session หมดอายุ กรุณา Login ใหม่')
+  var user = accountStore(ACCOUNT_USERS_PROPERTY)[session.username]
+  if (!user || user.active === false) throw new Error('ไม่พบบัญชี PetCare หรือบัญชีถูกปิดใช้งาน')
+  CURRENT_ACCOUNT_USER = user
+  return user
+}
+function newAccountSession(user) {
+  var token = accountToken(), sessions = accountStore(ACCOUNT_SESSIONS_PROPERTY)
+  sessions[token] = { username: user.username, expires_at: new Date().getTime() + 30 * 86400000 }
+  saveAccountStore(ACCOUNT_SESSIONS_PROPERTY, sessions)
+  return { status: 'ok', session_token: token, expires_at: sessions[token].expires_at, user: accountPublic(user) }
+}
+function registerAccount(p) {
+  var username = accountUsername(p.username), password = String(p.password || '')
+  if (password.length < 8) throw new Error('Password ต้องมีอย่างน้อย 8 ตัวอักษร')
+  if (!String(p.name || '').trim() || !String(p.surname || '').trim()) throw new Error('กรุณากรอกชื่อและนามสกุล')
+  var users = accountStore(ACCOUNT_USERS_PROPERTY)
+  if (users[username]) throw new Error('Username นี้ถูกใช้งานแล้ว')
+  var inviteCode = String(p.invite_code || '').trim().toUpperCase(), invite = inviteCode ? users['__invite__' + inviteCode] : null
+  if (inviteCode && !invite) throw new Error('Invite code ไม่ถูกต้องหรือหมดอายุ')
+  var salt = accountToken().slice(0, 24)
+  var user = { username: username, email: String(p.email || invite?.email || '').trim().toLowerCase(), name: String(p.name).trim(), surname: String(p.surname).trim(), role: invite?.role || 'user', spreadsheet_id: invite?.spreadsheet_id || '', active: true, salt: salt, password_hash: accountHash(password, salt), created_at: nowIso(), updated_at: nowIso() }
+  users[username] = user; if (invite) delete users['__invite__' + inviteCode]; saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  return newAccountSession(user)
+}
+function loginAccount(p) {
+  var username = accountUsername(p.username), user = accountStore(ACCOUNT_USERS_PROPERTY)[username]
+  if (!user || user.active === false || accountHash(String(p.password || ''), user.salt) !== user.password_hash) throw new Error('Username หรือ Password ไม่ถูกต้อง')
+  return newAccountSession(user)
+}
+function inviteAccount(p, google) {
+  var spreadsheetId = String(p.spreadsheet_id || '').trim()
+  if (!spreadsheetId) throw new Error('Google Sheet ID is required')
+  var file = getGoogleOwnedSpreadsheet(spreadsheetId, p.google_access_token, google.email)
+  setupSheets(file.id)
+  var users = accountStore(ACCOUNT_USERS_PROPERTY), code = accountToken().slice(0, 12).toUpperCase()
+  users['__invite__' + code] = { email: String(p.email || '').trim().toLowerCase(), role: String(p.role || 'user'), spreadsheet_id: file.id, created_at: nowIso() }
+  saveAccountStore(ACCOUNT_USERS_PROPERTY, users)
+  return { status: 'ok', invite_code: code, spreadsheet_id: file.id }
+}
+function accountStateSheet() {
+  if (!CURRENT_ACCOUNT_USER.spreadsheet_id) throw new Error('บัญชีนี้ยังไม่ได้รับสิทธิ์ Google Sheet')
+  setupSheets(CURRENT_ACCOUNT_USER.spreadsheet_id)
+  return SpreadsheetApp.openById(CURRENT_ACCOUNT_USER.spreadsheet_id).getSheetByName('app_state')
+}
+function accountReadState() {
+  var rows = accountStateSheet().getDataRange().getValues()
+  for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state' && rows[i][1]) {
+    try { return { status: 'ok', state: JSON.parse(rows[i][1]) } } catch (err) { return { status: 'ok', state: null } }
+  }
+  return { status: 'ok', state: null }
+}
+function accountSaveState(state) {
+  var sh = accountStateSheet(), rows = sh.getDataRange().getValues(), row = -1
+  for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state') { row = i + 1; break }
+  var values = [['account_state', JSON.stringify(state || {}), nowIso()]]
+  if (row < 0) sh.getRange(sh.getLastRow() + 1, 1, 1, 3).setValues(values); else sh.getRange(row, 1, 1, 3).setValues(values)
+  return { status: 'ok' }
+}
+
 function doGet() {
   return json({ status: 'error', message: 'POST with a verified LINE access token is required' })
 }
@@ -272,6 +350,13 @@ function doPost(e) {
       var provisioned = provisionUser(p, google)
       delete p.google_access_token
       return json(provisioned)
+    }
+    if (p.action === 'accountRegister') return json(registerAccount(p))
+    if (p.action === 'accountLogin') return json(loginAccount(p))
+    if (p.action === 'accountInvite') return json(inviteAccount(p, verifyGoogleIdentity(p.google_access_token)))
+    if (p.action === 'accountReadState' || p.action === 'accountSaveState') {
+      verifyAccountSession(p.session_token)
+      return json(p.action === 'accountReadState' ? accountReadState() : accountSaveState(p.state))
     }
     var token = p.access_token || extractBearer(e)
     CURRENT_LINE_USER_ID = verifyLineAccessToken(token)

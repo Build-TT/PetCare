@@ -174,7 +174,7 @@ export async function createOrFindPetCareSheet(accessToken, email, preferredSpre
 export async function loadAppState(accessToken, spreadsheetId) {
   const range = encodeURIComponent('app_state!A2:C')
   const data = await apiFetch(`${SHEETS_API}/spreadsheets/${spreadsheetId}/values/${range}`, { headers: authHeaders(accessToken) })
-  const row = (data.values || []).find((values) => values[0] === 'ui_state')
+  const row = (data.values || []).find((values) => values[0] === 'account_state') || (data.values || []).find((values) => values[0] === 'ui_state')
   if (!row?.[1]) return null
   try { return JSON.parse(row[1]) } catch { return null }
 }
@@ -591,6 +591,7 @@ export async function savePetCareState(accessToken, spreadsheetId, state) {
     activePetId: state.activePetId || '',
   })
   data.push({ range: 'app_state!A2:C2', majorDimension: 'ROWS', values: [[legacy.key, legacy.value, legacy.updated_at]] })
+  data.push({ range: 'app_state!A3:C3', majorDimension: 'ROWS', values: [['account_state', JSON.stringify({ tracks: state.tracks || [], logs: state.logs || [], activities: state.activities || [], reminders: state.reminders || [], symptoms: state.symptoms || [], pets: state.pets || [], treatmentHistory: state.treatmentHistory || [], lineRecipients: state.lineRecipients || [], activePetId: state.activePetId || '' }), legacy.updated_at]] })
   await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
     method: 'POST',
     headers: authHeaders(accessToken),

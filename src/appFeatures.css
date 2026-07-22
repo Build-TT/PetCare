@@ -547,6 +547,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .settings-panel > h2 + small { display: block; color: var(--pet-muted); line-height: 1.5; }
 .sheet-members h3 { margin: 0; font-size: 16px; }
 .member-invite { display: grid; gap: 4px; }
+.account-invite { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--pet-line); }
 .member-invite .primary { width: 100%; margin-top: 2px; }
 .member-list { display: grid; gap: 0; margin-top: 10px; border-top: 1px solid var(--pet-line); }
 .member-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 52px; padding: 6px 0; border-bottom: 1px solid var(--pet-line); }
