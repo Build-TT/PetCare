@@ -356,6 +356,11 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     setEditingLogId('')
   }, [activePetId])
 
+  useEffect(() => {
+    if (page !== 'track' || trackTab !== 'track') return
+    setSelectedTracks(activeTracks.map(track => track.id))
+  }, [page, trackTab, activePetId])
+
   const clearTrackDraft = () => {
     setTrackFormOpen(false)
     setEditingTrackId('')

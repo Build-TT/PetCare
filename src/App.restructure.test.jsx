@@ -87,14 +87,14 @@ describe('PetCare restructuring flows', () => {
     }))
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: 'เลือก Medicine' }))
+    expect(screen.getByRole('checkbox', { name: 'เลือก Medicine' })).toHaveProperty('checked', true)
     fireEvent.click(screen.getByRole('button', { name: 'Cough' }))
     fireEvent.change(screen.getByPlaceholderText('เพิ่มบันทึกไดอารี่ (ไม่บังคับ)'), { target: { value: 'note' } })
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกอาการและ Track' }))
     await waitFor(() => {
       const saved = JSON.parse(window.localStorage.getItem('petcare.local.v1'))
       expect(saved.tracks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 't1', active: true }), expect.objectContaining({ id: 't2', active: true })]))
-      expect(saved.logs[0].tracks).toEqual([expect.objectContaining({ id: 't1' })])
+      expect(saved.logs[0].tracks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 't1' })]))
     })
   })
 
