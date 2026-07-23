@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import GoogleSheetConnection from './GoogleSheetConnection.jsx'
 
 const { createOrFindPetCareSheet } = vi.hoisted(() => ({ createOrFindPetCareSheet: vi.fn() }))
@@ -14,6 +14,8 @@ vi.mock('../googleAuth.js', () => ({
 }))
 
 describe('Google Sheet connection control', () => {
+  beforeEach(() => window.localStorage.clear())
+
   it('requires explicit consent before starting Google authorization', () => {
     render(<GoogleSheetConnection onConnected={vi.fn()} />)
 
@@ -25,6 +27,13 @@ describe('Google Sheet connection control', () => {
   it('shows hydrate/connection failures instead of silently rolling back', () => {
     render(<GoogleSheetConnection onConnected={vi.fn()} externalError="โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ" />)
     expect(screen.getByRole('alert').textContent).toContain('โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ')
+  })
+
+  it('offers the remembered Sheet directly after the OAuth session expires', () => {
+    window.localStorage.setItem('petcare.google-sheet.v1', JSON.stringify({ email: 'owner@example.com', spreadsheetId: 'saved-sheet', spreadsheetUrl: 'https://sheet.test/saved', name: 'PetCare' }))
+    render(<GoogleSheetConnection onConnected={vi.fn()} />)
+
+    expect(screen.getByRole('button', { name: 'Reconnect saved Sheet' })).toBeTruthy()
   })
 })
 describe('Google Sheet production replacement', () => {

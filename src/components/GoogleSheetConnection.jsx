@@ -5,8 +5,17 @@ import '../googleSheetConnection.css'
 
 const CONNECTION_META_KEY = 'petcare.google-sheet.v1'
 
+function loadRememberedConnection() {
+  try {
+    const cached = JSON.parse(window.localStorage.getItem(CONNECTION_META_KEY) || 'null')
+    return cached?.spreadsheetId ? { ...cached, mode: 'google' } : null
+  } catch {
+    return null
+  }
+}
+
 export default function GoogleSheetConnection({ onConnected, onProvisionLine, onBusyChange, lineUserId = '', connection: connectedConnection = null, syncStatus = 'idle', syncError = '', externalError = '', ariaLabel = 'Google Sheet connection', initialConsentAccepted = false, showConsent = true, buttonLabel = 'เชื่อมต่อ Google' }) {
-  const [connection, setConnection] = useState(connectedConnection)
+  const [connection, setConnection] = useState(connectedConnection || loadRememberedConnection())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [consentAccepted, setConsentAccepted] = useState(initialConsentAccepted)
@@ -86,6 +95,7 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
   </div>
 
   const primaryAction = showConsent ? () => connect(true) : loadSheets
+  const reconnectRememberedSheet = () => connect(false, connection?.spreadsheetId || connectedConnection?.spreadsheetId)
   const primaryLabel = showConsent ? 'เชื่อมต่อ Google (สร้างไฟล์ใหม่)' : buttonLabel
 
   if (!isGoogleConfigured()) return <section className="setting setting-google" aria-label={ariaLabel}><b>Google Sheet</b><small>ยังไม่ได้ตั้งค่า Google OAuth · Demo mode</small><button type="button" className="text-button" disabled>เชื่อมต่อ Google</button>{externalError && <small role="alert" className="danger">{externalError}</small>}</section>
@@ -93,6 +103,7 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
   return <section className={`setting setting-google ${busy ? 'is-busy' : ''}`} aria-label={ariaLabel} aria-busy={busy}>
     {busy && <div className="sheet-profile-skeleton" aria-label="กำลังเชื่อมต่อ Google Sheet"><span /><div><i /><i /></div></div>}
     {connection ? <>
+      {!connection.accessToken && !connection.accountToken && <button type="button" className="primary" onClick={reconnectRememberedSheet} disabled={busy}>Reconnect saved Sheet</button>}
       <b>Google Sheet เชื่อมต่อแล้ว</b><small>{connection.email} · {connection.created ? 'สร้าง Sheet ใหม่แล้ว' : 'ใช้ Sheet เดิม'}</small>
       {syncStatus === 'pending' && <small>มีข้อมูลใหม่รอการบันทึกลง Google Sheet…</small>}{syncStatus === 'saving' && <small>กำลังบันทึกข้อมูลลง Google Sheet…</small>}{syncStatus === 'saved' && <small>บันทึกลง Google Sheet แล้ว ✓</small>}
       {syncError && <small role="alert" className="danger">บันทึกไม่สำเร็จ: {syncError}</small>}
