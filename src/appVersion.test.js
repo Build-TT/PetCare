@@ -13,8 +13,20 @@ function backendVersionFromGas() {
   return source.match(/PETCARE_BACKEND_VERSION\s*=\s*'([^']+)'/)?.[1]
 }
 
+function serviceWorkerVersion() {
+  const source = readFileSync(path.resolve('public', 'sw.js'), 'utf8')
+  return source.match(/const VERSION\s*=\s*'([^']+)'/)?.[1]
+}
+
 describe('release version constants', () => {
   it('keeps the web app version in step with the Apps Script backend', () => {
     expect(APP_VERSION).toBe(backendVersionFromGas())
+  })
+
+  // A browser installs a new service worker only when sw.js differs byte for
+  // byte. If this constant stops moving with releases, installed apps silently
+  // keep serving the previous build.
+  it('changes the service worker with every release', () => {
+    expect(serviceWorkerVersion()).toBe(APP_VERSION)
   })
 })

@@ -74,4 +74,23 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>
 )
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'))
+// An installed PWA is often resumed rather than relaunched, so it can keep
+// running a build for days. Ask for a fresh service worker on every load and
+// reload once the new one takes over — `controllerchange` also fires on the
+// very first install, which must not trigger a reload.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    const hadController = Boolean(navigator.serviceWorker.controller)
+    let reloading = false
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return
+      reloading = true
+      window.location.reload()
+    })
+    navigator.serviceWorker.register('/sw.js').then(registration => registration.update()).catch(() => undefined)
+  })
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return
+    navigator.serviceWorker.getRegistration().then(registration => registration?.update()).catch(() => undefined)
+  })
+}
