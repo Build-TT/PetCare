@@ -56,10 +56,14 @@ function MainApp({ initialPage }) {
     return () => { active = false }
   }, [session?.session_token, profileRetry])
   if (recoveryMode) return <App initialPage="settings" />
-  if (session?.session_token && profileError) return <main className="account-gate"><section className="account-card"><h1>เชื่อมต่อบัญชีไม่สำเร็จ</h1><small role="alert" className="danger">{profileError}</small><button className="primary" onClick={() => setProfileRetry(value => value + 1)}>ลองใหม่</button><button className="text-button" onClick={() => { clearAccountSession(); setSession(null) }}>เข้าสู่ระบบใหม่</button></section></main>
+  // A failed profile refresh is not a failed login. Blocking the whole app on
+  // it meant any backend hiccup (or being offline in an installed PWA) looked
+  // like a lost session and pushed people through a full reconnect. The cached
+  // session keeps working and the banner offers an explicit retry.
   return <><InstallAppPrompt />{!session?.session_token
     ? <AccountGate onAuthenticated={setSession} />
-    : <App key={`${session.session_token}:${session.user?.spreadsheet_id || ''}`} initialPage={initialPage} accountSession={session} role={session.user?.role} onLogout={() => { clearAccountSession(); window.location.reload() }} />}</>
+    : <>{profileError && <div className="account-offline-banner" role="status">ยังเชื่อมต่อบัญชี PetCare ไม่ได้ ({profileError}) — ใช้งานต่อได้และข้อมูลจะซิงก์เมื่อกลับมาออนไลน์<button type="button" className="text-button" onClick={() => setProfileRetry(value => value + 1)}>ลองใหม่</button></div>}
+      <App key={`${session.session_token}:${session.user?.spreadsheet_id || ''}`} initialPage={initialPage} accountSession={session} role={session.user?.role} onLogout={() => { clearAccountSession(); window.location.reload() }} /></>}</>
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(

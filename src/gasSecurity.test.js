@@ -485,6 +485,32 @@ describe('GAS security behavior', () => {
     expect(deliveries[0].message).toContain('Mochi')
   })
 
+  it('merges a shared-Sheet save instead of overwriting the other account records', () => {
+    const { sandbox } = makeGasSandbox()
+    const current = { logs: [{ id: 'shared', updated_at: 't1' }, { id: 'theirs', updated_at: 't2' }], pets: [{ id: 'p1', updated_at: 't1' }], activePetId: 'p1' }
+    const incoming = { logs: [{ id: 'shared', updated_at: 't1' }, { id: 'mine', updated_at: 't3' }], pets: [{ id: 'p1', updated_at: 't1' }] }
+    const baseline = { logs: { shared: 't1' }, pets: { p1: 't1' } }
+
+    const merged = sandbox.mergeSyncStates(baseline, incoming, current)
+
+    expect(merged.logs.map(log => log.id).sort()).toEqual(['mine', 'shared', 'theirs'])
+    expect(merged.pets.map(pet => pet.id)).toEqual(['p1'])
+    expect(merged.activePetId).toBe('p1')
+  })
+
+  it('still applies a delete the saving device actually made, and keeps concurrent edits', () => {
+    const { sandbox } = makeGasSandbox()
+    const current = { logs: [{ id: 'removed', updated_at: 't1' }, { id: 'edited-elsewhere', updated_at: 't9' }] }
+    const merged = sandbox.mergeSyncStates({ logs: { removed: 't1', 'edited-elsewhere': 't1' } }, { logs: [] }, current)
+    expect(merged.logs).toEqual([{ id: 'edited-elsewhere', updated_at: 't9' }])
+  })
+
+  it('never drops records when the saving device sends no baseline', () => {
+    const { sandbox } = makeGasSandbox()
+    const merged = sandbox.mergeSyncStates(null, { logs: [{ id: 'mine' }] }, { logs: [{ id: 'theirs' }] })
+    expect(merged.logs.map(log => log.id).sort()).toEqual(['mine', 'theirs'])
+  })
+
   it('makes provider failures observable without returning the provider body', () => {
     const { sandbox } = makeGasSandbox({
       properties: { LINE_TOKEN: 'token' },

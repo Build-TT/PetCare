@@ -533,10 +533,13 @@ h2 { color: var(--pet-ink); font-size: 17px; }
 .table-row { border-top-color: var(--pet-line); }
 .form-card input, .form-card select, .form-card textarea, .settings-panel input, .settings-panel select, .settings-panel textarea, .log-form input, .log-form textarea { border: 1.5px solid var(--pet-line); border-radius: 10px; color: var(--pet-ink); background: #fff; }
 
+.account-offline-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; width: min(100%, 430px); margin: 0 auto; padding: 8px 14px; background: var(--pet-lilac); color: var(--pet-ink); font-size: 12px; line-height: 1.5; text-align: center; }
+.account-offline-banner .text-button { min-height: 32px; padding: 0 10px; }
+
 .bottom-nav {
   width: min(100%, 430px);
   height: 88px;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 8px 8px 10px;
   background: rgba(255, 253, 250, .98);
   border-top: 1.5px solid var(--pet-line);

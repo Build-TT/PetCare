@@ -38,6 +38,18 @@ export function buildPetCareSheetTitle(email) {
   return `PetCare - ${String(email).trim()}`
 }
 
+export function buildPetCareProductionSheetTitle(email) {
+  return `PetCare Production - ${String(email).trim()}`
+}
+
+// "Create new" produces the Production title while the lookup only ever
+// searched the plain title, so a Production Sheet could never be found again
+// and every reconnect silently created yet another empty Sheet. Both titles
+// are candidates now, newest first.
+export function petCareSheetTitles(email) {
+  return [buildPetCareSheetTitle(email), buildPetCareProductionSheetTitle(email)]
+}
+
 export async function listPetCareSheets(accessToken) {
   const query = encodeURIComponent("mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false and name contains 'PetCare'")
   const fields = encodeURIComponent('files(id,name,webViewLink,modifiedTime)')
@@ -132,25 +144,31 @@ function columnName(number) {
 
 export async function createOrFindPetCareSheet(accessToken, email, preferredSpreadsheetId = '', options = {}) {
   const createNew = options.createNew === true
-  const title = createNew ? `PetCare Production - ${String(email).trim()}` : buildPetCareSheetTitle(email)
+  const title = createNew ? buildPetCareProductionSheetTitle(email) : buildPetCareSheetTitle(email)
   if (!createNew && preferredSpreadsheetId) {
+    let file
     try {
-      const file = await apiFetch(`${DRIVE_API}/files/${encodeURIComponent(preferredSpreadsheetId)}?fields=id,name,mimeType,webViewLink`, { headers: authHeaders(accessToken) })
-      if (file?.mimeType === 'application/vnd.google-apps.spreadsheet') {
-        const spreadsheet = await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(file.id)}?fields=spreadsheetId,spreadsheetUrl,sheets.properties`, { headers: authHeaders(accessToken) })
-        await initializeSchema(accessToken, spreadsheet)
-        return {
-          spreadsheetId: file.id,
-          spreadsheetUrl: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
-          created: false,
-          name: file.name,
-        }
-      }
-    } catch {
-      // The cached file may have been deleted or access may have been revoked.
+      file = await apiFetch(`${DRIVE_API}/files/${encodeURIComponent(preferredSpreadsheetId)}?fields=id,name,mimeType,webViewLink`, { headers: authHeaders(accessToken) })
+    } catch (lookupError) {
+      // Falling through to "create a new Sheet" here is what discarded a
+      // user's data whenever Drive was briefly unavailable. An explicitly
+      // requested Sheet either opens or the caller reports the failure.
+      throw new Error(`เปิด Google Sheet ที่บันทึกไว้ไม่สำเร็จ (${lookupError.message}) — ข้อมูลยังอยู่ครบ กรุณาลองใหม่หรือเลือก Sheet เดิมจากรายการ`, { cause: lookupError })
+    }
+    if (file?.mimeType !== 'application/vnd.google-apps.spreadsheet') throw new Error('ไฟล์ที่บันทึกไว้ไม่ใช่ Google Sheet กรุณาเลือก Sheet เดิมจากรายการ')
+    const spreadsheet = await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(file.id)}?fields=spreadsheetId,spreadsheetUrl,sheets.properties`, { headers: authHeaders(accessToken) })
+    await initializeSchema(accessToken, spreadsheet)
+    return {
+      spreadsheetId: file.id,
+      spreadsheetUrl: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
+      created: false,
+      name: file.name,
     }
   }
-  const query = encodeURIComponent(`name = '${title.replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`)
+  const titleFilter = createNew
+    ? `name = '${title.replace(/'/g, "\\'")}'`
+    : `(${petCareSheetTitles(email).map(candidate => `name = '${candidate.replace(/'/g, "\\'")}'`).join(' or ')})`
+  const query = encodeURIComponent(`${titleFilter} and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`)
   if (createNew) {
     const spreadsheet = await apiFetch(`${SHEETS_API}/spreadsheets`, {
       method: 'POST', headers: authHeaders(accessToken), body: JSON.stringify({ properties: { title } }),
@@ -556,7 +574,29 @@ export async function loadPetCareState(accessToken, spreadsheetId) {
   return merged
 }
 
-function reconcileNormalizedRows(name, existingRows, desiredRows) {
+// Each normalized sheet maps back to the UI collection whose baseline ids tell
+// us whether an unknown remote row is "a record I deleted" or "a record
+// another device just created". Without that distinction a save silently
+// erased every row written by a second user of a shared Sheet.
+export const SHEET_BASELINE_COLLECTION = {
+  pets: 'pets',
+  tracking_items: 'tracks',
+  tracking_versions: 'tracks',
+  symptom_catalog: 'symptoms',
+  symptom_logs: 'logs',
+  diary_logs: 'logs',
+  activity_logs: 'activities',
+  treatment_history: 'treatmentHistory',
+  reminders: 'reminders',
+  reminder_recipients: 'lineRecipients',
+}
+
+export function baselineIdsForSheet(baseline, name) {
+  const collection = baseline?.[SHEET_BASELINE_COLLECTION[name]]
+  return collection && typeof collection === 'object' ? new Set(Object.keys(collection)) : null
+}
+
+export function reconcileNormalizedRows(name, existingRows, desiredRows, baselineIds = null) {
   const headers = PETCARE_SHEETS[name]
   const idIndex = headers.indexOf('id')
   const desiredById = new Map(desiredRows.filter(row => row[idIndex] !== '').map(row => [String(row[idIndex]), row]))
@@ -572,16 +612,19 @@ function reconcileNormalizedRows(name, existingRows, desiredRows) {
     }
     const isInactiveRecord = (name === 'pets' || name === 'symptom_catalog') && activeIndex >= 0 && !asBoolean(row[activeIndex], true)
     const isTrackingHistory = name === 'tracking_versions' && id !== ''
-    return isInactiveRecord || isTrackingHistory ? [row] : []
+    // Only rows this device knew about at its last sync may be deleted; rows
+    // it has never seen belong to another device and are always preserved.
+    const isUnseenElsewhere = id !== '' && (!baselineIds || !baselineIds.has(id))
+    return isInactiveRecord || isTrackingHistory || isUnseenElsewhere ? [row] : []
   })
   return [...reconciled, ...desiredById.values()]
 }
 
-export async function savePetCareState(accessToken, spreadsheetId, state) {
+export async function savePetCareState(accessToken, spreadsheetId, state, baseline = null) {
   const existing = await loadNormalizedSheets(accessToken, spreadsheetId)
   const serialized = serializeNormalizedState(state)
   for (const name of NORMALIZED_STATE_SHEETS) {
-    serialized[name] = reconcileNormalizedRows(name, existing[name].rows, serialized[name])
+    serialized[name] = reconcileNormalizedRows(name, existing[name].rows, serialized[name], baselineIdsForSheet(baseline, name))
   }
   const data = NORMALIZED_STATE_SHEETS.flatMap(name => {
     const requiredHeaders = PETCARE_SHEETS[name]
@@ -603,7 +646,11 @@ export async function savePetCareState(accessToken, spreadsheetId, state) {
     activePetId: state.activePetId || '',
   })
   data.push({ range: 'app_state!A2:C2', majorDimension: 'ROWS', values: [[legacy.key, legacy.value, legacy.updated_at]] })
-  data.push({ range: 'app_state!A3:C3', majorDimension: 'ROWS', values: [['account_state', JSON.stringify({ tracks: state.tracks || [], logs: state.logs || [], activities: state.activities || [], reminders: state.reminders || [], symptoms: state.symptoms || [], pets: (state.pets || []).filter(pet => !pet.demo), treatmentHistory: state.treatmentHistory || [], lineRecipients: state.lineRecipients || [], activePetId: state.activePetId || '' }), legacy.updated_at]] })
+  // The account_state blob is what invited users read through Apps Script, so
+  // it must mirror the reconciled rows rather than this device's raw snapshot;
+  // otherwise it re-introduces the overwrite the reconciliation just avoided.
+  const reconciledState = deserializeNormalizedState(serialized)
+  data.push({ range: 'app_state!A3:C3', majorDimension: 'ROWS', values: [['account_state', JSON.stringify({ ...reconciledState, activePetId: state.activePetId || '' }), legacy.updated_at]] })
   await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
     method: 'POST',
     headers: authHeaders(accessToken),

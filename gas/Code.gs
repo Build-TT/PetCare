@@ -57,7 +57,7 @@ var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 var ACCOUNT_USERS_PROPERTY = 'PETCARE_ACCOUNT_USERS'
 var ACCOUNT_SESSIONS_PROPERTY = 'PETCARE_ACCOUNT_SESSIONS'
 var ACCOUNT_THROTTLE_PROPERTY = 'PETCARE_ACCOUNT_LOGIN_THROTTLE'
-var PETCARE_BACKEND_VERSION = '2026.07.23.2'
+var PETCARE_BACKEND_VERSION = '2026.08.02.1'
 var CURRENT_ACCOUNT_USER = null
 
 var DEFAULT_LOG_TYPES = [
@@ -547,20 +547,85 @@ function accountReadState() {
   }
   return { status: 'ok', state: null }
 }
-function accountSaveStateUnsafe(state) {
+// --- Shared-Sheet three-way merge -------------------------------------------
+// A save used to clear every managed row and rewrite it from the calling
+// device's snapshot, so whichever user saved last erased the other's records.
+// The merge below runs inside the script lock and treats the sheet as the
+// authoritative "remote" side: the caller's baseline (the state it last read)
+// is what distinguishes "I deleted this" from "someone else just added this".
+// Keep this behaviour identical to src/sync/merge.js.
+var PETCARE_SYNCED_COLLECTIONS = ['pets', 'tracks', 'logs', 'activities', 'reminders', 'symptoms', 'treatmentHistory', 'lineRecipients']
+
+function syncRecordId(record) {
+  if (!record || typeof record !== 'object') return ''
+  return record.id === undefined || record.id === null ? '' : String(record.id)
+}
+
+function syncRecordTimestamp(record) {
+  if (!record || typeof record !== 'object') return ''
+  return String(record.updated_at || record.created_at || '')
+}
+
+function mergeSyncCollection(baselineTimestamps, incomingRecords, currentRecords) {
+  var incoming = Array.isArray(incomingRecords) ? incomingRecords : []
+  var current = Array.isArray(currentRecords) ? currentRecords : []
+  var baseline = baselineTimestamps && typeof baselineTimestamps === 'object' ? baselineTimestamps : null
+  var unchangedSinceBaseline = function (record) {
+    var id = syncRecordId(record)
+    return Boolean(baseline) && Object.prototype.hasOwnProperty.call(baseline, id) && baseline[id] === syncRecordTimestamp(record)
+  }
+  var currentById = {}, incomingIds = {}, consumed = {}, merged = []
+  current.forEach(function (record) { var id = syncRecordId(record); if (id) currentById[id] = record })
+  incoming.forEach(function (record) { var id = syncRecordId(record); if (id) incomingIds[id] = true })
+  incoming.forEach(function (record) {
+    var id = syncRecordId(record)
+    if (!id) { merged.push(record); return }
+    if (Object.prototype.hasOwnProperty.call(currentById, id)) {
+      consumed[id] = true
+      var counterpart = currentById[id]
+      merged.push(syncRecordTimestamp(counterpart) > syncRecordTimestamp(record) ? counterpart : record)
+      return
+    }
+    if (unchangedSinceBaseline(record)) return
+    merged.push(record)
+  })
+  current.forEach(function (record) {
+    var id = syncRecordId(record)
+    if (!id) { merged.push(record); return }
+    if (consumed[id] || incomingIds[id]) return
+    if (unchangedSinceBaseline(record)) return
+    merged.push(record)
+  })
+  return merged
+}
+
+function mergeSyncStates(baseline, incomingState, currentState) {
+  var incoming = incomingState && typeof incomingState === 'object' ? incomingState : {}
+  if (!currentState || typeof currentState !== 'object') return incoming
+  var merged = {}
+  Object.keys(currentState).forEach(function (key) { merged[key] = currentState[key] })
+  Object.keys(incoming).forEach(function (key) { merged[key] = incoming[key] })
+  PETCARE_SYNCED_COLLECTIONS.forEach(function (name) {
+    merged[name] = mergeSyncCollection(baseline && baseline[name], incoming[name], currentState[name])
+  })
+  merged.activePetId = incoming.activePetId || currentState.activePetId || ''
+  return merged
+}
+
+function accountSaveStateUnsafe(state, baseline) {
   if (!accountCanWrite(CURRENT_ACCOUNT_USER)) throw new Error('บัญชีนี้มีสิทธิ์อ่านอย่างเดียว ไม่สามารถบันทึกข้อมูลได้')
   setupSheets(CURRENT_ACCOUNT_USER.spreadsheet_id)
   var accountSpreadsheet = SpreadsheetApp.openById(CURRENT_ACCOUNT_USER.spreadsheet_id)
-  accountWriteNormalizedState(state, accountSpreadsheet)
+  var persistedState = mergeSyncStates(baseline, state, accountReadState().state)
+  if (Array.isArray(persistedState.pets)) persistedState = Object.assign({}, persistedState, { pets: persistedState.pets.filter(function (pet) { return !pet.demo }) })
+  accountWriteNormalizedState(persistedState, accountSpreadsheet)
   var sh = accountStateSheet(), rows = sh.getDataRange().getValues(), row = -1
   for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state') { row = i + 1; break }
-  var persistedState = state || {}
-  if (Array.isArray(persistedState.pets)) persistedState = Object.assign({}, persistedState, { pets: persistedState.pets.filter(function (pet) { return !pet.demo }) })
   var values = [['account_state', JSON.stringify(persistedState), nowIso()]]
   if (row < 0) sh.getRange(sh.getLastRow() + 1, 1, 1, 3).setValues(values); else sh.getRange(row, 1, 1, 3).setValues(values)
-  return { status: 'ok' }
+  return { status: 'ok', state: persistedState }
 }
-function accountSaveState(state) { return withAccountLock(function () { return accountSaveStateUnsafe(state) }) }
+function accountSaveState(state, baseline) { return withAccountLock(function () { return accountSaveStateUnsafe(state, baseline) }) }
 
 function doGet() {
   return json({ status: 'error', message: 'POST with a verified LINE access token is required' })
@@ -601,7 +666,7 @@ function doPost(e) {
     if (p.action === 'accountReadSession') return json({ status: 'ok', user: accountPublic(verifyAccountSession(p.session_token)) })
     if (p.action === 'accountReadState' || p.action === 'accountSaveState') {
       verifyAccountSession(p.session_token)
-      return json(p.action === 'accountReadState' ? accountReadState() : accountSaveState(p.state))
+      return json(p.action === 'accountReadState' ? accountReadState() : accountSaveState(p.state, p.baseline))
     }
     var token = p.access_token || extractBearer(e)
     CURRENT_LINE_USER_ID = verifyLineAccessToken(token)

@@ -17,16 +17,23 @@ describe('remote tracker state', () => {
 
   it('keeps every local collection when the remote state is partial', () => {
     const fallback = { tracks: [{ id: 't1' }], logs: [{ id: 'l1' }], activities: [{ id: 'a1' }], reminders: [{ id: 'r1' }], symptoms: ['ซึม'], pets: [{ id: 'p1' }], activePetId: 'p1' }
-    expect(hydrateRemoteState({ logs: [{ id: 'remote' }] }, fallback)).toEqual({ ...fallback, logs: [{ id: 'remote' }], treatmentHistory: [], lineRecipients: [] })
+    expect(hydrateRemoteState({ logs: [{ id: 'remote' }] }, fallback)).toEqual({ ...fallback, logs: [{ id: 'l1' }, { id: 'remote' }], treatmentHistory: [], lineRecipients: [] })
   })
 
-  it('lets a pending local outbox win over stale remote collections', () => {
+  it('keeps a pending local outbox and the records another device wrote', () => {
     const fallback = { tracks: [], logs: [], activities: [], reminders: [], symptoms: [], pets: [{ id: 'p1' }], activePetId: 'p1' }
     const pending = { logs: [{ id: 'local-new' }], reminders: [{ id: 'local-reminder' }] }
-    const remote = { logs: [{ id: 'stale-remote' }], reminders: [{ id: 'stale-reminder' }], pets: [{ id: 'p1' }] }
+    const remote = { logs: [{ id: 'other-device' }], reminders: [{ id: 'other-reminder' }], pets: [{ id: 'p1' }] }
     const hydrated = hydrateRemoteState(remote, fallback, pending)
-    expect(hydrated.logs).toEqual(pending.logs)
-    expect(hydrated.reminders).toEqual(pending.reminders)
+    expect(hydrated.logs).toEqual([{ id: 'local-new' }, { id: 'other-device' }])
+    expect(hydrated.reminders).toEqual([{ id: 'local-reminder' }, { id: 'other-reminder' }])
+  })
+
+  it('drops a record the other device deleted only when this device did not touch it', () => {
+    const fallback = { logs: [{ id: 'deleted-elsewhere', updated_at: 't1' }, { id: 'edited-here', updated_at: 't2' }] }
+    const baseline = { logs: { 'deleted-elsewhere': 't1', 'edited-here': 't1' } }
+    const hydrated = hydrateRemoteState({ logs: [] }, fallback, null, baseline)
+    expect(hydrated.logs).toEqual([{ id: 'edited-here', updated_at: 't2' }])
   })
 
   it('does not let an older successful remote save clear a newer failed-write outbox', () => {
@@ -44,8 +51,8 @@ describe('remote tracker state', () => {
     const fallback = { tracks: [], logs: [], activities: [], reminders: [], symptoms: [], pets: [{ id: 'p1' }], activePetId: 'p1' }
     const edited = { ...fallback, logs: [{ id: 'edited-before-debounce' }] }
     const pendingSnapshot = { revision: 7, state: edited }
-    const reloaded = hydrateRemoteState({ ...fallback, logs: [{ id: 'stale-remote' }] }, fallback, unwrapPendingState(pendingSnapshot))
-    expect(reloaded.logs).toEqual(edited.logs)
+    const reloaded = hydrateRemoteState({ ...fallback, logs: [{ id: 'written-elsewhere' }] }, fallback, unwrapPendingState(pendingSnapshot))
+    expect(reloaded.logs).toEqual([...edited.logs, { id: 'written-elsewhere' }])
     expect(isCurrentRemoteRevision(8, pendingSnapshot.revision)).toBe(false)
   })
 

@@ -94,6 +94,9 @@ describe('PetCare shell and restructuring', () => {
     render(<App />)
     await waitFor(() => expect(JSON.parse(localStorage.getItem('petcare.local.v1')).logs[0].pet_id).toBe('p1'))
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
+    // Active tracking items open preselected, so this click clears the draft
+    // selection rather than making one.
+    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(true)
     fireEvent.click(screen.getByRole('checkbox', { name: 'เลือก legacy' }))
     fireEvent.click(screen.getByRole('button', { name: 'จัดการโปรไฟล์สัตว์เลี้ยง' }))
     fireEvent.click(screen.getByRole('button', { name: /Two/ }))
@@ -102,7 +105,8 @@ describe('PetCare shell and restructuring', () => {
     fireEvent.click(screen.getByRole('button', { name: 'จัดการโปรไฟล์สัตว์เลี้ยง' }))
     fireEvent.click(screen.getByRole('button', { name: /One/ }))
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
-    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(false)
+    // Switching pets discards the manual deselection instead of carrying it over.
+    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(true)
   })
 
   it('uses app-native species icons and small gender accessories', () => {

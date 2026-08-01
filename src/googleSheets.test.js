@@ -64,6 +64,32 @@ describe('Google Sheet schema', () => {
     expect(fetchMock.mock.calls[0][0]).toContain('/drive/v3/files/sheet-cached')
   })
 
+  it('never creates a replacement Sheet when the remembered one cannot be opened', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => ({ ok: false, status: 503, json: async () => ({ error: { message: 'backend error' } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createOrFindPetCareSheet('token', 'owner@example.com', 'sheet-remembered')).rejects.toThrow('ข้อมูลยังอยู่ครบ')
+    expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
+  })
+
+  it('finds a Sheet that was created through the production title', async () => {
+    const fetchMock = vi.fn().mockImplementation((url) => ({
+      ok: true,
+      json: async () => url.includes('/drive/v3/files?')
+        ? { files: [{ id: 'sheet-production', name: 'PetCare Production - owner@example.com', webViewLink: 'https://docs.google.com/spreadsheets/d/sheet-production/edit' }] }
+        : url.includes('values:batchGet') ? { valueRanges: Object.keys(PETCARE_SHEETS).map(() => ({ values: [['id']] })) }
+          : { spreadsheetId: 'sheet-production', sheets: Object.keys(PETCARE_SHEETS).map(title => ({ properties: { title } })) },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await createOrFindPetCareSheet('token', 'owner@example.com')
+
+    expect(result).toMatchObject({ spreadsheetId: 'sheet-production', created: false })
+    const searchUrl = decodeURIComponent(fetchMock.mock.calls[0][0])
+    expect(searchUrl).toContain("name = 'PetCare - owner@example.com'")
+    expect(searchUrl).toContain("name = 'PetCare Production - owner@example.com'")
+  })
+
   it('creates a separate production Sheet when explicitly requested', async () => {
     const fetchMock = vi.fn().mockImplementation((url, options = {}) => ({
       ok: true,
@@ -87,7 +113,8 @@ describe('Google Sheet schema', () => {
       json: async () => url.includes('values:batchGet')
         ? { valueRanges: [{ values: [['Existing Header']] }] }
         : url.includes('values:batchUpdate') ? { updated: true }
-          : { spreadsheetId: 'sheet-1', sheets: [{ properties: { title: 'My Data', sheetId: '1' } }] },
+          : url.includes('/drive/v3/files/sheet-1') ? { id: 'sheet-1', name: 'PetCare - owner@example.com', mimeType: 'application/vnd.google-apps.spreadsheet' }
+            : { spreadsheetId: 'sheet-1', sheets: [{ properties: { title: 'My Data', sheetId: '1' } }] },
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -297,7 +324,11 @@ describe('Google Sheet schema', () => {
     const fetchMock = vi.fn().mockImplementation((url) => ({ ok: true, json: async () => url.includes('values:batchGet') ? { valueRanges } : {} }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await savePetCareState('token', 'sheet-1', { pets: [], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] })
+    await savePetCareState('token', 'sheet-1', { pets: [], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] }, {
+      pets: { 'old-1': '', 'old-2': '' }, tracks: { 'old-1': '', 'old-2': '' }, symptoms: { 'old-1': '', 'old-2': '' },
+      logs: { 'old-1': '', 'old-2': '' }, activities: { 'old-1': '', 'old-2': '' }, treatmentHistory: { 'old-1': '', 'old-2': '' },
+      reminders: { 'old-1': '', 'old-2': '' }, lineRecipients: { 'old-1': '', 'old-2': '' },
+    })
 
     const update = fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))
     const body = JSON.parse(update[1].body)
@@ -322,7 +353,7 @@ describe('Google Sheet schema', () => {
 
     await savePetCareState('token', 'sheet-1', {
       pets: [{ id: 'new-pet', name: 'New pet', species: 'dog' }], tracks: [], symptoms: [], logs: [], activities: [], reminders: [],
-    })
+    }, { pets: { 'old-pet': '' } })
 
     const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST')[1].body)
     const customColumn = String.fromCharCode(65 + petHeaders.indexOf('custom_note'))
@@ -387,6 +418,11 @@ describe('Google Sheet schema', () => {
     const fetchMock = vi.fn().mockImplementation((url) => ({ ok: true, json: async () => url.includes('values:batchGet') ? { valueRanges } : {} }))
     vi.stubGlobal('fetch', fetchMock)
 
+    const baseline = {
+      pets: { p1: '', 'p-delete': '' }, tracks: { t1: '', 't-delete': '' }, symptoms: { s1: '', 's-delete': '' },
+      logs: { l1: '', 'l-delete': '' }, activities: { a1: '', 'a-delete': '' }, treatmentHistory: { h1: '', 'h-delete': '' },
+      reminders: { r1: '', 'r-delete': '' }, lineRecipients: { rr1: '', 'rr-delete': '' },
+    }
     await savePetCareState('token', 'sheet-1', {
       pets: [{ id: 'p1', name: 'Updated pet', active: true, created_at: timestamp }],
       tracks: [{ id: 't1', name: 'Updated item', active: true, version_id: 'tv1', version_name: 'Updated current', versions: [{ id: 'tv1', tracking_item_id: 't1', name: 'Updated current', active: true }] }],
@@ -396,7 +432,7 @@ describe('Google Sheet schema', () => {
       treatmentHistory: [{ id: 'h1', pet_id: 'p1', category: 'illness', title: 'Updated history' }],
       reminders: [{ id: 'r1', pet_id: 'p1', title: 'Updated reminder', enabled: true }],
       lineRecipients: [{ id: 'rr1', reminder_id: '*', recipient_id: `U${'d'.repeat(32)}` }],
-    })
+    }, baseline)
 
     const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST')[1].body)
     const valuesFor = (sheet, header) => {
@@ -415,6 +451,44 @@ describe('Google Sheet schema', () => {
     expect(valuesFor('pets', 'name')).toContain('Updated pet')
     expect(valuesFor('symptom_catalog', 'label_th')).toContain('updated')
     expect(valuesFor('reminders', 'title')).toContain('Updated reminder')
+  })
+
+  it('keeps rows another user of a shared Sheet added since this device last synced', async () => {
+    const names = ['pets', 'tracking_items', 'tracking_versions', 'symptom_catalog', 'symptom_logs', 'diary_logs', 'activity_logs', 'treatment_history', 'reminders', 'reminder_recipients']
+    const row = (name, values) => PETCARE_SHEETS[name].map(header => values[header] ?? '')
+    const existing = Object.fromEntries(names.map(name => [name, []]))
+    existing.symptom_logs = [row('symptom_logs', { id: 'mine', pet_id: 'p1' }), row('symptom_logs', { id: 'theirs', pet_id: 'p1' })]
+    existing.activity_logs = [row('activity_logs', { id: 'their-activity', pet_id: 'p1' })]
+    const valueRanges = names.map(name => ({ values: [PETCARE_SHEETS[name], ...existing[name]] }))
+    const fetchMock = vi.fn().mockImplementation((url) => ({ ok: true, json: async () => url.includes('values:batchGet') ? { valueRanges } : {} }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    // This device only ever saw "mine"; "theirs" was written by the other user.
+    await savePetCareState('token', 'sheet-1', {
+      pets: [], tracks: [], symptoms: [], activities: [], reminders: [], treatmentHistory: [], lineRecipients: [],
+      logs: [{ id: 'mine', pet_id: 'p1', datetime: '2026-08-01T09:00', symptom: 'ซึม', tracks: [] }],
+    }, { logs: { mine: '' }, activities: {}, pets: {}, tracks: {}, symptoms: {}, treatmentHistory: {}, reminders: {}, lineRecipients: {} })
+
+    const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST')[1].body)
+    const idsFor = sheet => body.data.find(item => item.range.startsWith(`${sheet}!A2:`)).values.flat()
+    expect(idsFor('symptom_logs')).toEqual(expect.arrayContaining(['mine', 'theirs']))
+    expect(idsFor('activity_logs')).toContain('their-activity')
+    const sharedBlob = JSON.parse(body.data.find(item => item.range === 'app_state!A3:C3').values[0][1])
+    expect(sharedBlob.logs.map(item => item.id)).toEqual(expect.arrayContaining(['mine', 'theirs']))
+    expect(sharedBlob.activities.map(item => item.id)).toContain('their-activity')
+  })
+
+  it('never deletes unknown rows when this device has no baseline yet', async () => {
+    const names = ['pets', 'tracking_items', 'tracking_versions', 'symptom_catalog', 'symptom_logs', 'diary_logs', 'activity_logs', 'treatment_history', 'reminders', 'reminder_recipients']
+    const row = (name, values) => PETCARE_SHEETS[name].map(header => values[header] ?? '')
+    const valueRanges = names.map(name => ({ values: [PETCARE_SHEETS[name], ...(name === 'symptom_logs' ? [row('symptom_logs', { id: 'pre-existing', pet_id: 'p1' })] : [])] }))
+    const fetchMock = vi.fn().mockImplementation((url) => ({ ok: true, json: async () => url.includes('values:batchGet') ? { valueRanges } : {} }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await savePetCareState('token', 'sheet-1', { pets: [], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] })
+
+    const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST')[1].body)
+    expect(body.data.find(item => item.range.startsWith('symptom_logs!A2:')).values.flat()).toContain('pre-existing')
   })
 
   it('migrates legacy app_state when normalized sheets are still empty', async () => {

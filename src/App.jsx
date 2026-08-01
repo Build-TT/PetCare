@@ -4,7 +4,7 @@ import { loadStoredState, saveStoredState } from './domain/storage.js'
 import SettingsSurface from './components/SettingsSurface.jsx'
 import ReminderForm from './components/ReminderForm.jsx'
 import GoogleDriveOnboarding from './components/GoogleDriveOnboarding.jsx'
-import { hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, unwrapPendingState } from './remoteState.js'
+import { SYNC_BASELINE_KEY, hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, snapshotBaseline, unwrapPendingState } from './remoteState.js'
 import { provisionGoogleLineLink } from './gasProvisioning.js'
 import { getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
 import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
@@ -34,10 +34,13 @@ const REMOTE_OUTBOX_KEY = 'petcare.remote-outbox.v1'
 const GOOGLE_SHEET_META_KEY = 'petcare.google-sheet.v1'
 const GOOGLE_ONBOARDING_KEY = 'petcare.google-drive-onboarding.v1'
 const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
-const navItems = [
+// Exported so the layout test can assert the bottom-nav CSS grid always has a
+// column per button; a mismatch silently pushes the last item off screen.
+export const MAIN_NAV_ITEMS = [
   ['home', '⌂', 'หน้าหลัก'], ['track', '🐾', 'สมุดบันทึก'], ['diary', '✎', 'ประวัติการรักษา'],
   ['reminders', '🔔', 'เตือน'], ['settings', '⚙', 'ตั้งค่า'],
 ]
+const navItems = MAIN_NAV_ITEMS
 
 const symptomLabel = symptom => typeof symptom === 'string' ? symptom : (symptom.label_th || symptom.label_en || '')
 const symptomKey = symptom => typeof symptom === 'string' ? symptom : (symptom.id || `${symptom.pet_id || 'global'}:${symptomLabel(symptom)}`)
@@ -285,6 +288,16 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const remoteRevisionRef = useRef(0)
   const remoteSaveQueueRef = useRef(Promise.resolve())
   const formContextRef = useRef(null)
+  // Latest persisted collections, so the background refresh can merge without
+  // re-subscribing its listener on every keystroke.
+  const currentStateRef = useRef(null)
+  // A sync baseline only describes the local snapshot it was written with. If
+  // that snapshot is gone (cleared site data, a fresh device, storage
+  // eviction) the baseline would make every remote record look like something
+  // this device deleted, so the first hydration must ignore it.
+  const bootBaselineRef = useRef(window.localStorage.getItem(LOCAL_STATE_KEY) === null
+    ? null
+    : loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null))
   const [reminders, setReminders] = useState(initial.reminders ?? defaultReminders)
   const [symptoms, setSymptoms] = useState(initial.symptoms ?? defaultSymptoms)
   const [treatmentHistory, setTreatmentHistory] = useState(initial.treatmentHistory ?? defaultTreatmentHistory)
@@ -405,14 +418,19 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       if (!isCurrentRemoteRevision(remoteRevisionRef.current, requestRevision)) return
       setSyncStatus('saving')
       setSyncError('')
+      const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
       const queuedSave = remoteSaveQueueRef.current
         .catch(() => undefined)
-        .then(() => saveRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, pendingState, googleConnection))
+        .then(() => saveRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, pendingState, googleConnection, baseline))
       remoteSaveQueueRef.current = queuedSave
       queuedSave
         .then(() => {
           if (!isCurrentRemoteRevision(remoteRevisionRef.current, requestRevision)) return
           window.localStorage.removeItem(REMOTE_OUTBOX_KEY)
+          // The acknowledged snapshot becomes the new common ancestor. Records
+          // another device added are absent from it, so a later save can never
+          // mistake them for something this device deleted.
+          saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(pendingState))
           setSyncStatus('saved')
           setSyncError('')
         })
@@ -431,27 +449,27 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     setRemoteReady(false)
     try {
       const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId, connection)
-      const isNewSheet = connection.created === true
-      const outbox = isNewSheet ? null : loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null)
-      const pendingState = isNewSheet ? null : unwrapPendingState(outbox)
-      const fallback = isNewSheet
-        ? { tracks: [], logs: [], activities: [], reminders: [], symptoms: [], pets: defaultPets, treatmentHistory: [], lineRecipients: [], activePetId: defaultPets[0].id }
-        : { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, ...(pendingState || {}) }
-      const hydrated = hydrateRemoteState(remote, fallback, pendingState)
+      // Connecting — to an existing Sheet or a brand-new one — must only ever
+      // add data. The previous behaviour reset every collection for a new
+      // Sheet and dropped the outbox, which erased local records on every
+      // reconnect. Local records are carried into the new Sheet instead.
+      const pendingState = unwrapPendingState(loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null))
+      const fallback = { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, ...(pendingState || {}) }
+      const hydrated = hydrateRemoteState(remote, fallback, pendingState, bootBaselineRef.current)
       setTracks(hydrated.tracks)
       setLogs(hydrated.logs)
       setActivities(hydrated.activities ?? [])
       setReminders(hydrated.reminders)
       setSymptoms(hydrated.symptoms ?? defaultSymptoms)
-      setPets(hydrated.pets?.length ? hydrated.pets : (isNewSheet ? defaultPets : pets))
+      setPets(hydrated.pets?.length ? hydrated.pets : pets)
       setTreatmentHistory(hydrated.treatmentHistory ?? [])
       setLineRecipients(hydrated.lineRecipients ?? [])
-      setActivePetId(hydrated.activePetId || (isNewSheet ? defaultPets[0].id : activePetId))
+      setActivePetId(hydrated.activePetId || activePetId)
+      saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(remote || {}))
       setGoogleConnection(connection)
       setRemoteReady(true)
       window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
       setShowGoogleOnboarding(false)
-      if (isNewSheet) window.localStorage.removeItem(REMOTE_OUTBOX_KEY)
       for (const recipient of hydrated.lineRecipients ?? []) {
         await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipient.recipient_id })
       }
@@ -792,19 +810,52 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       } catch {
         if (cancelled) return
         // Do not discard the remembered Sheet on a transient/expired OAuth
-        // token. Local data remains usable and the user can reconnect from
-        // Settings; dropping this state used to make every pull-to-refresh
-        // look like the Sheet had been disconnected.
-        setGoogleConnection(null)
+        // token. A silent token refresh routinely fails inside an installed
+        // PWA, and clearing the connection here is what forced a full
+        // reconnect — and a fresh empty Sheet — on every launch. The Sheet
+        // metadata stays; only the token is missing, so Settings can offer a
+        // one-tap reconnect while local changes stay queued in the outbox.
         setRemoteReady(false)
-        setShowGoogleOnboarding(true)
+        setShowGoogleOnboarding(false)
         setSyncStatus('error')
-        setSyncError('Google Sheet session restore failed; reconnect Google to continue syncing. Local changes remain queued.')
+        setSyncError('เชื่อมต่อ Google อัตโนมัติไม่สำเร็จ ข้อมูลในเครื่องยังอยู่ครบและรอซิงก์ — กด Reconnect ในหน้าตั้งค่าเพื่อเชื่อม Sheet เดิมต่อ')
       }
     }
     restoreGoogleConnection()
     return () => { cancelled = true }
   }, [recoveryMode])
+
+  currentStateRef.current = { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId }
+
+  // Two people editing a shared Sheet only converge if each browser re-reads
+  // the remote state; without this each device kept saving its own snapshot
+  // and the records ping-ponged. Refreshing when the tab becomes visible is
+  // the cheapest point that covers switching apps on a phone.
+  useEffect(() => {
+    if (recoveryMode || !googleConnection?.spreadsheetId || !remoteReady) return undefined
+    const refreshFromRemote = async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const remote = await loadRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, googleConnection)
+        if (!remote) return
+        const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
+        const merged = hydrateRemoteState(remote, currentStateRef.current, null, baseline)
+        setTracks(merged.tracks)
+        setLogs(merged.logs)
+        setActivities(merged.activities ?? [])
+        setReminders(merged.reminders)
+        setSymptoms(merged.symptoms ?? defaultSymptoms)
+        if (merged.pets?.length) setPets(merged.pets)
+        setTreatmentHistory(merged.treatmentHistory ?? [])
+        setLineRecipients(merged.lineRecipients ?? [])
+        saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(remote))
+      } catch {
+        // Keep working offline; the outbox still holds unsaved changes.
+      }
+    }
+    document.addEventListener('visibilitychange', refreshFromRemote)
+    return () => document.removeEventListener('visibilitychange', refreshFromRemote)
+  }, [googleConnection, remoteReady, recoveryMode])
 
   const editReminder = reminder => {
     setStructuredReminderEditId(reminder.id)
