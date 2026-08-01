@@ -57,7 +57,7 @@ var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 var ACCOUNT_USERS_PROPERTY = 'PETCARE_ACCOUNT_USERS'
 var ACCOUNT_SESSIONS_PROPERTY = 'PETCARE_ACCOUNT_SESSIONS'
 var ACCOUNT_THROTTLE_PROPERTY = 'PETCARE_ACCOUNT_LOGIN_THROTTLE'
-var PETCARE_BACKEND_VERSION = '2026.08.02.1'
+var PETCARE_BACKEND_VERSION = '2026.08.02.2'
 var CURRENT_ACCOUNT_USER = null
 
 var DEFAULT_LOG_TYPES = [
@@ -566,6 +566,23 @@ function syncRecordTimestamp(record) {
   return String(record.updated_at || record.created_at || '')
 }
 
+// Ordering is by real time, not string order: the app writes both local-time
+// and full ISO stamps and a text compare ranks the same instant differently
+// depending on spelling. A record with no stamp is an edit the serializer has
+// not seen, so it never loses to its own saved copy.
+function syncRecordTime(record) {
+  var value = syncRecordTimestamp(record)
+  if (!value) return null
+  var time = Date.parse(value)
+  return isNaN(time) ? null : time
+}
+
+function syncRecordIsNewer(candidate, current) {
+  var candidateTime = syncRecordTime(candidate), currentTime = syncRecordTime(current)
+  if (currentTime === null || candidateTime === null) return false
+  return candidateTime > currentTime
+}
+
 function mergeSyncCollection(baselineTimestamps, incomingRecords, currentRecords) {
   var incoming = Array.isArray(incomingRecords) ? incomingRecords : []
   var current = Array.isArray(currentRecords) ? currentRecords : []
@@ -583,7 +600,7 @@ function mergeSyncCollection(baselineTimestamps, incomingRecords, currentRecords
     if (Object.prototype.hasOwnProperty.call(currentById, id)) {
       consumed[id] = true
       var counterpart = currentById[id]
-      merged.push(syncRecordTimestamp(counterpart) > syncRecordTimestamp(record) ? counterpart : record)
+      merged.push(syncRecordIsNewer(counterpart, record) ? counterpart : record)
       return
     }
     if (unchangedSinceBaseline(record)) return

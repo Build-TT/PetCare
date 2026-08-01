@@ -59,6 +59,33 @@ describe('mergeCollection', () => {
     expect(merged).toEqual([expect.objectContaining({ id: 'gone', updated_at: 't2' })])
   })
 
+  it('treats two spellings of the same instant as a tie, not as a newer record', () => {
+    // A plain string compare ranks the longer '...00.000Z' below '...00Z'
+    // even though both name the same moment, silently discarding the local edit.
+    const merged = mergeCollection({ shared: 'x' },
+      [log('shared', '2026-08-01T10:00:00.000Z', { diary: 'local' })],
+      [log('shared', '2026-08-01T10:00:00Z', { diary: 'remote' })])
+    expect(merged).toEqual([expect.objectContaining({ diary: 'local' })])
+  })
+
+  it('compares a local-time timestamp against an ISO one by real time', () => {
+    const localForm = '2026-08-01T10:05'
+    const oneMinuteLater = new Date(Date.parse(localForm) + 60000).toISOString()
+    const merged = mergeCollection({ shared: 'x' },
+      [log('shared', localForm, { diary: 'local' })],
+      [log('shared', oneMinuteLater, { diary: 'remote is genuinely newer' })])
+    expect(merged).toEqual([expect.objectContaining({ diary: 'remote is genuinely newer' })])
+  })
+
+  it('keeps an untimestamped local record from losing to its own saved copy', () => {
+    // Serialization stamps updated_at on the way into the Sheet while the local
+    // record keeps none; without this the round trip overwrites the local edit.
+    const merged = mergeCollection({ shared: '' },
+      [log('shared', undefined, { diary: 'edited locally' })],
+      [log('shared', '2026-08-01T10:00:00.000Z', { diary: 'serialized copy' })])
+    expect(merged).toEqual([expect.objectContaining({ diary: 'edited locally' })])
+  })
+
   it('never drops anything when there is no baseline yet', () => {
     const merged = mergeCollection(null, [log('a', 't1')], [log('b', 't1')])
     expect(merged.map(item => item.id)).toEqual(['a', 'b'])

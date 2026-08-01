@@ -486,7 +486,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const saveLog = () => {
     if (!canSave) return
     const linked = selectedTracks.map(id => activeTracks.find(track => track.id === id)).filter(Boolean).map(track => ({ ...track }))
-    setLogs([{ id: `log_${Date.now()}`, pet_id: activePet.id, datetime, symptom: selectedSymptoms.join(', '), diary: note.trim(), tracks: linked }, ...logs])
+    const timestamp = new Date().toISOString()
+    setLogs([{ id: `log_${Date.now()}`, pet_id: activePet.id, datetime, symptom: selectedSymptoms.join(', '), diary: note.trim(), tracks: linked, created_at: timestamp, updated_at: timestamp }, ...logs])
     setSelectedSymptoms([]); setSelectedTracks([]); setNote(''); setDatetime(nowLocal())
   }
   const openTrackForm = (track = null) => {
@@ -503,7 +504,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     if (!trackName.trim() || !trackSchedule.trim()) return
     const track = tracks.find(item => item.id === editingTrackId)
     if (!track) {
-      setTracks([...tracks, { id: `track_${Date.now()}`, pet_id: activePet.id, name: trackName.trim(), dose: trackDose.trim(), schedule: trackSchedule.trim(), active: true }])
+      const createdAt = new Date().toISOString()
+      setTracks([...tracks, { id: `track_${Date.now()}`, pet_id: activePet.id, name: trackName.trim(), dose: trackDose.trim(), schedule: trackSchedule.trim(), active: true, created_at: createdAt, updated_at: createdAt }])
       resetTrackForm()
       return
     }
@@ -578,6 +580,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       diary_text: logEditDiary.trim(),
       diary_log_text: logEditDiary.trim(),
       diary_log_present: logEditDiary.trim().length > 0,
+      updated_at: new Date().toISOString(),
     } : item))
     setEditingLogId('')
   }
@@ -637,8 +640,9 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       return
     }
     setSymptomError('')
-    if (editingSymptomId) setSymptoms(symptoms.map(item => item.id === editingSymptomId ? { ...item, label_th: normalized } : item))
-    else setSymptoms([...symptoms, { id: `symptom_${Date.now()}`, pet_id: activePet.id, label_th: normalized, label_en: '', active: true }])
+    const symptomTimestamp = new Date().toISOString()
+    if (editingSymptomId) setSymptoms(symptoms.map(item => item.id === editingSymptomId ? { ...item, label_th: normalized, updated_at: symptomTimestamp } : item))
+    else setSymptoms([...symptoms, { id: `symptom_${Date.now()}`, pet_id: activePet.id, label_th: normalized, label_en: '', active: true, created_at: symptomTimestamp, updated_at: symptomTimestamp }])
     setSymptomName('')
     setEditingSymptomId('')
     resetSymptomForm()
@@ -734,7 +738,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       setLineRecipientError('USER ID นี้ถูกเพิ่มแล้ว')
       return
     }
-    setLineRecipients([...lineRecipients, { id: `line_recipient_${Date.now()}`, reminder_id: '*', recipient_id: normalized, created_at: new Date().toISOString() }])
+    setLineRecipients([...lineRecipients, { id: `line_recipient_${Date.now()}`, reminder_id: '*', recipient_id: normalized, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }])
     if (googleConnection) {
       provisionLine(googleConnection, normalized).catch(error => setLineRecipientError(error.message || 'เชื่อม LINE กับ Google Sheet ไม่สำเร็จ'))
     }
@@ -758,6 +762,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       schedule_config: { date, frequency, detail: `${date} · ${frequency} · ยังไม่ได้ตั้งผู้รับ LINE` },
       start_at: date,
       enabled: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }])
     setReminderFormOpen(false)
     setReminderTitle(''); setReminderDate(''); setReminderFrequency('ครั้งเดียว'); setReminderError('')
@@ -776,6 +782,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       schedule_config: { ...config },
       start_at: config.date,
       enabled: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     }
     setReminders(structuredReminderEditId
       ? reminders.map(reminder => reminder.id === structuredReminderEditId ? { ...nextReminder, id: reminder.id, created_at: reminder.created_at, updated_at: new Date().toISOString() } : reminder)
@@ -946,11 +954,11 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     lineRecipients={lineRecipients}
     reminders={visibleReminders}
     onOpenTrack={openTrackForm}
-    onToggleTrack={track => setTracks(tracks.map(item => item.id === track.id ? { ...item, active: item.active === false } : item))}
+    onToggleTrack={track => setTracks(tracks.map(item => item.id === track.id ? { ...item, active: item.active === false, updated_at: new Date().toISOString() } : item))}
     onDeleteTrack={deleteTrack}
     onOpenSymptom={openSymptomForm}
-    onToggleSymptom={item => setSymptoms(symptoms.map(current => symptomKey(current) === symptomKey(item) ? { ...current, active: current.active === false } : current))}
-    onDeleteSymptom={item => setSymptoms(symptoms.map(current => symptomKey(current) === symptomKey(item) ? { ...current, active: false, deleted_at: new Date().toISOString() } : current))}
+    onToggleSymptom={item => setSymptoms(symptoms.map(current => symptomKey(current) === symptomKey(item) ? { ...current, active: current.active === false, updated_at: new Date().toISOString() } : current))}
+    onDeleteSymptom={item => setSymptoms(symptoms.map(current => symptomKey(current) === symptomKey(item) ? { ...current, active: false, deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() } : current))}
     lineUserId={lineUserId}
     onLineUserIdChange={setLineUserId}
     onAddLineRecipient={addLineRecipient}
@@ -973,7 +981,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     {page === 'home' && <><div className="hero pet-hero"><span className="hero-pet"><span className="hero-pet-icon" role="img" aria-label={`ไอคอนของ ${activePet.name}`}>{petIcon(activePet)}</span>{petAccessory(activePet) && <span className="hero-pet-accessory" aria-hidden="true">{petAccessory(activePet)}</span>}</span>{activePetAge ? <div className="hero-age"><span className="hero-age-icon">{activePetStage.icon}</span><div><small>{activePet.name} · {activePetStage.label}</small><strong>{activePetAge.years} ปี {activePetAge.months} เดือน {activePetAge.days} วัน</strong></div></div> : <div className="hero-age-empty">เพิ่มวันเกิดใน Profile</div>}</div><div className="stats"><article>อาการ<b>{health.symptoms}</b></article><article>น้ำหนัก<b>{health.weight}</b></article><article>เดินวันนี้<b>{health.walk}</b></article></div><div className="section-title"><h2>กราฟติดตามอาการ</h2><small>เลือกวัน เดือน หรือปีได้</small></div><Summary logs={visibleLogs} symptoms={visibleSymptoms} showRecords={false} /><DailyRecords logs={visibleLogs} activities={visibleActivities} onEditLog={openLogEditor} onDeleteLog={id => setLogs(logs.filter(log => log.id !== id))} />{editingLogId && <section className="form-card" role="dialog" aria-label="ฟอร์มแก้ไขบันทึก"><label>วันที่และเวลา<input type="datetime-local" value={logEditDatetime} onChange={e => setLogEditDatetime(e.target.value)} /></label><label>บันทึก<textarea value={logEditDiary} onChange={e => setLogEditDiary(e.target.value)} /></label><button className="primary" onClick={saveLogEdit}>บันทึกการแก้ไข</button><button className="text-button" onClick={() => setEditingLogId('')}>ยกเลิก</button></section>}</>}
     {page === 'track' && <><nav className="tabs" aria-label="แท็บติดตาม"><button className={trackTab === 'track' ? 'active' : ''} onClick={() => setTrackTab('track')}>Track</button><button className={trackTab === 'activity' ? 'active' : ''} onClick={() => setTrackTab('activity')}>กิจวัตร</button></nav>{trackTab === 'track' ? <><div className="section-title"><h2>รายการที่กำลังติดตาม</h2><button className="add-button" onClick={() => openTrackForm()}>＋ เพิ่มรายการติดตาม</button></div>{trackFormOpen && <section className="form-card" aria-label="ฟอร์มรายการติดตาม"><label>ชื่อรายการ<input value={trackName} onChange={e => setTrackName(e.target.value)} /></label><label>ขนาด/รายละเอียด<input value={trackDose} onChange={e => setTrackDose(e.target.value)} /></label><label>เวลา/ความถี่<input value={trackSchedule} onChange={e => setTrackSchedule(e.target.value)} /></label><div className="form-actions"><button className="primary" disabled={!trackName.trim() || !trackSchedule.trim()} onClick={saveTrack}>{editingTrackId ? 'บันทึกการแก้ไข' : 'เพิ่มรายการ'}</button><button className="text-button" onClick={resetTrackForm}>ยกเลิก</button></div></section>}{activeTracks.map(track => <article className="track-card compact" key={track.id}><label className="track-toggle"><input type="checkbox" aria-label={`เลือก ${track.name}`} checked={selectedTracks.includes(track.id)} onChange={() => setSelectedTracks(selectedTracks.includes(track.id) ? selectedTracks.filter(id => id !== track.id) : [...selectedTracks, track.id])} /></label><div><b>{track.name}</b><small>{track.dose} · {track.schedule}</small></div></article>)}<section className="log-form"><div className="section-title"><h2>บันทึกอาการ</h2><button className="text-button" onClick={() => { setSymptomError(''); setSymptomFormOpen(true) }}>＋ เพิ่มอาการ</button></div>{symptomFormOpen && <section className="form-card" aria-label="ฟอร์มเพิ่มอาการ"><label>ชื่ออาการ<input value={symptomName} onChange={e => { setSymptomName(e.target.value); setSymptomError('') }} /></label>{symptomError && <small role="alert">{symptomError}</small>}<div className="form-actions"><button className="primary" disabled={!symptomName.trim()} onClick={addSymptom}>บันทึกอาการ</button><button className="text-button" onClick={() => setSymptomFormOpen(false)}>ยกเลิก</button></div></section>}<input aria-label="วันที่และเวลาบันทึก" type="datetime-local" value={datetime} onChange={e => setDatetime(e.target.value)} /><div className="symptom-grid">{visibleSymptoms.map(item => { const label = symptomLabel(item); return <button key={symptomKey(item)} className={selectedSymptoms.includes(label) ? 'selected' : ''} onClick={() => setSelectedSymptoms(selectedSymptoms.includes(label) ? selectedSymptoms.filter(x => x !== label) : [...selectedSymptoms, label])}>{label}</button> })}</div><textarea value={note} onChange={e => setNote(e.target.value)} placeholder="เพิ่มบันทึกไดอารี่ (ไม่บังคับ)" /><button className="primary" disabled={!canSave} onClick={saveLog}>บันทึกอาการและ Track</button></section></> : <><div className="section-title"><h2>กิจวัตร</h2><button className="primary" onClick={addActivity}>＋ บันทึกกิจวัตร</button></div>{visibleActivities.map(item => <article className="table-row" key={item.id}><time>{String(item.datetime).slice(5, 10)}<br />{String(item.datetime).slice(11, 16)}</time><div><b>{item.activity_type || item.symptom}</b><p>{item.note || item.diary}</p></div><div className="row-actions"><button onClick={() => editActivity(item)}>แก้ไข</button><button className="danger" onClick={() => setActivities(activities.filter(activity => activity.id !== item.id))}>ลบ</button></div></article>)}{activityFormOpen && <section className="form-card activity-form" aria-label="ฟอร์มกิจวัตร"><label>ประเภทกิจวัตร<select value={activityType} onChange={e => setActivityType(e.target.value)}>{ACTIVITY_TYPES.map(type => <option key={type}>{type}</option>)}</select></label>{activityType === 'อื่นๆ' && <label>ระบุประเภท<input value={activityCustomType} onChange={e => setActivityCustomType(e.target.value)} /></label>}<label>วันและเวลา<input type="datetime-local" value={activityDatetime} onChange={e => setActivityDatetime(e.target.value)} /></label><label>ระยะเวลา (นาที)<input type="number" min="0" value={activityDuration} onChange={e => setActivityDuration(e.target.value)} /></label><label>Note<textarea value={activityNote} onChange={e => setActivityNote(e.target.value)} /></label>{activityError && <small role="alert">{activityError}</small>}<button className="primary" onClick={saveActivity}>บันทึกกิจวัตร</button></section>}</>}</>}
     {page === 'diary' && <><div className="section-title"><h2>ประวัติการรักษา</h2><button className="primary" onClick={() => setTreatmentFormOpen(true)}>＋ เพิ่มประวัติการรักษา</button></div><div className="data-table">{visibleTreatmentHistory.map(item => <article className="table-row" key={item.id}><time>{item.started_at?.slice(5, 10)}<br />{item.started_at?.slice(11, 16)}</time><div><b>{item.category} · {item.title}</b><p>{item.clinic}</p>{item.doctor && <p>หมอ: {item.doctor}</p>}<p>{item.note}</p></div><div className="row-actions"><button onClick={() => editTreatment(item)}>แก้ไข</button><button className="danger" onClick={() => setTreatmentHistory(treatmentHistory.filter(history => history.id !== item.id))}>ลบ</button></div></article>)}</div>{treatmentFormOpen && <section className="form-card treatment-form" aria-label="ฟอร์มประวัติการรักษา"><label>ประเภท<select value={treatmentCategory} onChange={e => setTreatmentCategory(e.target.value)}>{TREATMENT_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>{treatmentCategory === 'อื่นๆ' && <label>ระบุประเภท<input value={treatmentCustomCategory} onChange={e => setTreatmentCustomCategory(e.target.value)} /></label>}<label>รายการ<input value={treatmentTitle} onChange={e => setTreatmentTitle(e.target.value)} /></label><label>วันที่/เวลา<input type="datetime-local" value={treatmentStartedAt} onChange={e => setTreatmentStartedAt(e.target.value)} /></label><label>คลินิก<input value={treatmentClinic} onChange={e => setTreatmentClinic(e.target.value)} /></label><label>ชื่อหมอ<input value={treatmentDoctor} onChange={e => setTreatmentDoctor(e.target.value)} placeholder="เช่น นพ. ..." /></label><label>Note<textarea value={treatmentNote} onChange={e => setTreatmentNote(e.target.value)} /></label>{treatmentError && <small role="alert">{treatmentError}</small>}<button className="primary" disabled={!treatmentTitle.trim()} onClick={saveTreatment}>บันทึก</button></section>}</>}
-    {page === 'reminders' && <section className="reminder-page"><div className="section-title"><div><h2>แจ้งเตือน</h2><small>ตั้งรอบและเวลาส่งแจ้งเตือนเข้า LINE</small></div><button className="primary reminder-create" onClick={() => { setStructuredReminderEditId(''); setStructuredReminderFormOpen(true) }}>＋ สร้างการแจ้งเตือน</button></div>{visibleReminders.length === 0 && <div className="reminder-empty"><b>ยังไม่มีการแจ้งเตือน</b><p>สร้างรายการแรกเพื่อกำหนดวัน รอบ และเวลาที่ต้องการ</p></div>}<div className="reminder-list">{visibleReminders.map(reminder => <article className={`reminder ${reminder.enabled ? '' : 'off'}`} key={reminder.id}><div className="reminder-card-head"><div><b>{reminder.title}</b><p>{reminder.detail}</p></div><button type="button" className="reminder-edit" aria-label={`แก้ไข ${reminder.title}`} onClick={() => editReminder(reminder)}>แก้ไข</button></div><div className="reminder-actions"><button type="button" onClick={() => setReminders(reminders.map(item => item.id === reminder.id ? { ...item, enabled: !item.enabled } : item))}>{reminder.enabled ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button><button type="button" className="danger" onClick={() => setReminders(reminders.filter(item => item.id !== reminder.id))}>ลบ</button></div></article>)}</div>{structuredReminderFormOpen && <ReminderForm key={structuredReminderEditId || 'new'} initialValue={reminderFormValue(visibleReminders.find(reminder => reminder.id === structuredReminderEditId))} onSave={saveStructuredReminder} onCancel={() => { setStructuredReminderFormOpen(false); setStructuredReminderEditId('') }} />}</section>}
+    {page === 'reminders' && <section className="reminder-page"><div className="section-title"><div><h2>แจ้งเตือน</h2><small>ตั้งรอบและเวลาส่งแจ้งเตือนเข้า LINE</small></div><button className="primary reminder-create" onClick={() => { setStructuredReminderEditId(''); setStructuredReminderFormOpen(true) }}>＋ สร้างการแจ้งเตือน</button></div>{visibleReminders.length === 0 && <div className="reminder-empty"><b>ยังไม่มีการแจ้งเตือน</b><p>สร้างรายการแรกเพื่อกำหนดวัน รอบ และเวลาที่ต้องการ</p></div>}<div className="reminder-list">{visibleReminders.map(reminder => <article className={`reminder ${reminder.enabled ? '' : 'off'}`} key={reminder.id}><div className="reminder-card-head"><div><b>{reminder.title}</b><p>{reminder.detail}</p></div><button type="button" className="reminder-edit" aria-label={`แก้ไข ${reminder.title}`} onClick={() => editReminder(reminder)}>แก้ไข</button></div><div className="reminder-actions"><button type="button" onClick={() => setReminders(reminders.map(item => item.id === reminder.id ? { ...item, enabled: !item.enabled, updated_at: new Date().toISOString() } : item))}>{reminder.enabled ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button><button type="button" className="danger" onClick={() => setReminders(reminders.filter(item => item.id !== reminder.id))}>ลบ</button></div></article>)}</div>{structuredReminderFormOpen && <ReminderForm key={structuredReminderEditId || 'new'} initialValue={reminderFormValue(visibleReminders.find(reminder => reminder.id === structuredReminderEditId))} onSave={saveStructuredReminder} onCancel={() => { setStructuredReminderFormOpen(false); setStructuredReminderEditId('') }} />}</section>}
     {page === 'settings' && settingsSurface}
     <nav className="bottom-nav">{navItems.map(([key, icon, label]) => <button aria-label={label} className={page === key ? 'active' : ''} key={key} onClick={() => navigateMainPage(key)}><span aria-hidden="true">{icon}</span>{label}</button>)}</nav>
   </main>

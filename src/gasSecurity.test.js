@@ -505,6 +505,19 @@ describe('GAS security behavior', () => {
     expect(merged.logs).toEqual([{ id: 'edited-elsewhere', updated_at: 't9' }])
   })
 
+  it('orders concurrent edits by real time, matching the browser merge', () => {
+    const { sandbox } = makeGasSandbox()
+    const sameInstant = sandbox.mergeSyncStates({ logs: { l1: 'x' } },
+      { logs: [{ id: 'l1', updated_at: '2026-08-01T10:00:00.000Z', note: 'incoming' }] },
+      { logs: [{ id: 'l1', updated_at: '2026-08-01T10:00:00Z', note: 'stored' }] })
+    expect(sameInstant.logs[0].note).toBe('incoming')
+
+    const untimestamped = sandbox.mergeSyncStates({ logs: { l1: '' } },
+      { logs: [{ id: 'l1', note: 'unsaved local edit' }] },
+      { logs: [{ id: 'l1', updated_at: '2026-08-01T10:00:00.000Z', note: 'serialized copy' }] })
+    expect(untimestamped.logs[0].note).toBe('unsaved local edit')
+  })
+
   it('never drops records when the saving device sends no baseline', () => {
     const { sandbox } = makeGasSandbox()
     const merged = sandbox.mergeSyncStates(null, { logs: [{ id: 'mine' }] }, { logs: [{ id: 'theirs' }] })

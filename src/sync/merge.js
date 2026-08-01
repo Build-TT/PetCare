@@ -20,9 +20,34 @@ export function recordId(record) {
   return String(record.id ?? '')
 }
 
+// The raw string, used for baseline identity where only "is this byte-for-byte
+// the value I last synced" matters.
 export function recordTimestamp(record) {
   if (!record || typeof record !== 'object') return ''
   return String(record.updated_at || record.created_at || '')
+}
+
+// Ordering must not be a string compare: the app writes both local-time
+// ('2026-08-01T10:05') and full ISO ('…T10:05:00.000Z') stamps, and comparing
+// those as text ranks the same instant differently depending on how it was
+// spelled. Records with no timestamp sort oldest, except that a record which
+// has never been stamped locally must not lose to the copy the serializer
+// stamped on its way into the Sheet — see recordIsNewer.
+export function recordTime(record) {
+  const value = recordTimestamp(record)
+  if (!value) return null
+  const time = Date.parse(value)
+  return Number.isNaN(time) ? null : time
+}
+
+export function recordIsNewer(candidate, current) {
+  const candidateTime = recordTime(candidate)
+  const currentTime = recordTime(current)
+  // An untimestamped record is a local edit the serializer has not seen yet;
+  // the timestamped side is that same record's saved copy, so it must not win.
+  if (currentTime === null) return false
+  if (candidateTime === null) return false
+  return candidateTime > currentTime
 }
 
 export function snapshotBaseline(state) {
@@ -51,7 +76,7 @@ export function mergeCollection(baselineTimestamps, localRecords = [], remoteRec
     if (remoteById.has(id)) {
       const counterpart = remoteById.get(id)
       consumed.add(id)
-      merged.push(recordTimestamp(counterpart) > recordTimestamp(record) ? counterpart : record)
+      merged.push(recordIsNewer(counterpart, record) ? counterpart : record)
       continue
     }
     // Missing remotely: a delete from the other device, unless this device has

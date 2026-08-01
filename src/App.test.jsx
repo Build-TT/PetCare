@@ -17,6 +17,26 @@ describe('PetCare shell and restructuring', () => {
     expect(petLifeStage({ years: 9, months: 0, days: 0 }).key).toBe('senior')
   })
 
+  it('stamps updated_at on every mutation so concurrent edits can be ordered', async () => {
+    window.localStorage.setItem('petcare.local.v1', JSON.stringify(state({ symptoms: [{ id: 's1', pet_id: 'p1', label_th: 'ซึม', active: true }] })))
+    render(<App initialPage="track" />)
+
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการติดตาม/ }))
+    const trackForm = screen.getByLabelText('ฟอร์มรายการติดตาม')
+    fireEvent.change(within(trackForm).getByLabelText('ชื่อรายการ'), { target: { value: 'ยาหยอดตา' } })
+    fireEvent.change(within(trackForm).getByLabelText('เวลา/ความถี่'), { target: { value: 'เช้า' } })
+    fireEvent.click(within(trackForm).getByRole('button', { name: 'เพิ่มรายการ' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'ซึม' }))
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกอาการและ Track' }))
+
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem('petcare.local.v1'))
+      expect(saved.logs[0].updated_at).toBeTruthy()
+      expect(saved.tracks[0].updated_at).toBeTruthy()
+    })
+  })
+
   it('renders all five primary navigation destinations', () => {
     render(<App />)
     for (const name of ['หน้าหลัก', 'สมุดบันทึก', 'ประวัติการรักษา', 'ตั้งค่า']) expect(screen.getByRole('button', { name })).toBeTruthy()
