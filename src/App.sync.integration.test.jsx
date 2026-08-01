@@ -109,6 +109,29 @@ describe('App remote sync integration', () => {
     expect(screen.getByRole('button', { name: 'ไข้' })).toBeTruthy()
   })
 
+  it('shows Sheet records that carry no pet_id once more than one pet exists', async () => {
+    // belongsToPet hides an unowned record whenever there are 2+ pets, and the
+    // legacy-owner migration only ever ran on localStorage. Rows written before
+    // multi-pet support therefore sat in the Sheet, fully intact, and never
+    // appeared in the app.
+    loadRemoteStateMock.mockResolvedValue({
+      tracks: [], activities: [], reminders: [], symptoms: [], treatmentHistory: [], lineRecipients: [],
+      pets: [{ id: 'p1', name: 'หนึ่ง' }, { id: 'p2', name: 'สอง' }],
+      logs: [{ id: 'orphan', datetime: '2026-07-20T08:00', symptom: 'ซึม', diary: 'บันทึกที่ไม่มีเจ้าของ', tracks: [] }],
+      activePetId: 'p1',
+    })
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    fireEvent.click(screen.getByRole('button', { name: 'หน้าหลัก' }))
+    await waitFor(() => expect(screen.getByText(/1 อาการ/)).toBeTruthy())
+  })
+
   it('sends a newly created activity and optional duration to the connected Google Sheet save', async () => {
     render(<App />)
 

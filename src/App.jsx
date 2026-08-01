@@ -455,7 +455,11 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       // reconnect. Local records are carried into the new Sheet instead.
       const pendingState = unwrapPendingState(loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null))
       const fallback = { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, ...(pendingState || {}) }
-      const hydrated = hydrateRemoteState(remote, fallback, pendingState, bootBaselineRef.current)
+      // Records from the Sheet get the same legacy-owner migration as local
+      // ones. Without it an unowned row stays invisible forever once a second
+      // pet exists, because belongsToPet only shows unowned records when there
+      // is exactly one pet — the data was never lost, just unreachable.
+      const hydrated = migrateLegacyOwners(hydrateRemoteState(remote, fallback, pendingState, bootBaselineRef.current))
       setTracks(hydrated.tracks)
       setLogs(hydrated.logs)
       setActivities(hydrated.activities ?? [])
@@ -847,7 +851,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
         const remote = await loadRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, googleConnection)
         if (!remote) return
         const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
-        const merged = hydrateRemoteState(remote, currentStateRef.current, null, baseline)
+        const merged = migrateLegacyOwners(hydrateRemoteState(remote, currentStateRef.current, null, baseline))
         setTracks(merged.tracks)
         setLogs(merged.logs)
         setActivities(merged.activities ?? [])
