@@ -41,13 +41,18 @@ export default function SettingsSurface({
   }, [])
 
   const back = () => onSectionChange('')
+  // Name the side that is actually behind. The old copy always blamed the
+  // backend, which sent people redeploying Apps Script when the web app was
+  // the stale one.
   const versionStatus = backendError
     ? 'ตรวจ backend ไม่ได้ — อาจยังไม่ได้ Deploy เวอร์ชันล่าสุด'
-    : backendVersion && backendVersion !== APP_VERSION
-      ? 'เวอร์ชันไม่ตรงกัน — กรุณา Deploy backend ล่าสุด'
-      : backendVersion
+    : !backendVersion
+      ? 'กำลังตรวจสอบ backend…'
+      : backendVersion === APP_VERSION
         ? 'เวอร์ชันตรงกัน'
-        : 'กำลังตรวจสอบ backend…'
+        : backendVersion > APP_VERSION
+          ? 'Web app ยังไม่อัปเดต — รอ deploy เว็บให้เสร็จ แล้วปิดเปิดแอปใหม่'
+          : 'Backend ยังไม่อัปเดต — กรุณา Deploy Apps Script เวอร์ชันล่าสุด'
 
   if (!section) {
     return <section className="settings-overview" aria-label="เมนูตั้งค่า">
