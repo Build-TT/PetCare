@@ -10,6 +10,7 @@ import { parseRoute } from './routes.js'
 import AccountGate from './components/AccountGate.jsx'
 import InstallAppPrompt from './components/InstallAppPrompt.jsx'
 import { clearAccountSession, getAccountSession, loadAccountProfile, saveAccountSession } from './accountAuth.js'
+import { isRecoveryMode } from './sync/recoveryMode.js'
 import './index.css'
 import './appFeatures.css'
 
@@ -28,6 +29,7 @@ export function Router() {
 }
 
 function MainApp({ initialPage }) {
+  const recoveryMode = isRecoveryMode(window.location)
   const [session, setSession] = React.useState(() => getAccountSession())
   const [profileError, setProfileError] = React.useState('')
   const [profileRetry, setProfileRetry] = React.useState(0)
@@ -53,6 +55,7 @@ function MainApp({ initialPage }) {
     })
     return () => { active = false }
   }, [session?.session_token, profileRetry])
+  if (recoveryMode) return <App initialPage="settings" />
   if (session?.session_token && profileError) return <main className="account-gate"><section className="account-card"><h1>เชื่อมต่อบัญชีไม่สำเร็จ</h1><small role="alert" className="danger">{profileError}</small><button className="primary" onClick={() => setProfileRetry(value => value + 1)}>ลองใหม่</button><button className="text-button" onClick={() => { clearAccountSession(); setSession(null) }}>เข้าสู่ระบบใหม่</button></section></main>
   return <><InstallAppPrompt />{!session?.session_token
     ? <AccountGate onAuthenticated={setSession} />

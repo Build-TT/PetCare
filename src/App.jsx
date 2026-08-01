@@ -8,6 +8,8 @@ import { hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemot
 import { provisionGoogleLineLink } from './gasProvisioning.js'
 import { getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
 import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
+import { exportLocalRecoveryBundle } from './sync/recovery.js'
+import { isRecoveryMode } from './sync/recoveryMode.js'
 import './index.css'
 import './appFeatures.css'
 
@@ -231,6 +233,7 @@ function migrateLegacyOwners(state) {
 }
 
 function App({ initialPage = 'home', accountSession = null, role = accountSession?.user?.role, onLogout = null }) {
+  const recoveryMode = isRecoveryMode(window.location)
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
   const storedGoogleSheet = loadStoredState(window.localStorage, GOOGLE_SHEET_META_KEY, null)
   const isGoogleAccount = accountSession?.user?.username?.startsWith('google-')
@@ -381,14 +384,14 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   }
 
   useEffect(() => {
-    if (isReader) return undefined
+    if (recoveryMode || isReader) return undefined
     const persistedPets = pets.filter(pet => !pet.demo)
     const persistedActivePetId = persistedPets.some(pet => pet.id === activePetId) ? activePetId : ''
     saveStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedActivePetId })
-  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, isReader])
+  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, isReader, recoveryMode])
 
   useEffect(() => {
-    if (isReader) return undefined
+    if (recoveryMode || isReader) return undefined
     if (!googleConnection || !remoteReady) return undefined
     const requestRevision = ++remoteRevisionRef.current
     const persistedPets = pets.filter(pet => !pet.demo)
@@ -421,7 +424,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
         })
     }, 500)
     return () => window.clearTimeout(timeout)
-  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader])
+  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader, recoveryMode])
 
   const handleGoogleConnected = async (connection) => {
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
@@ -764,6 +767,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   }
 
   useEffect(() => {
+    if (recoveryMode) return undefined
     if (!hasRememberedGoogleSheet) {
       setShowGoogleOnboarding(true)
       return undefined
@@ -800,7 +804,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     }
     restoreGoogleConnection()
     return () => { cancelled = true }
-  }, [])
+  }, [recoveryMode])
 
   const editReminder = reminder => {
     setStructuredReminderEditId(reminder.id)
@@ -867,6 +871,20 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       event.preventDefault()
       event.stopPropagation()
     }
+  }
+
+  const downloadRecovery = () => {
+    const blob = new Blob([JSON.stringify(exportLocalRecoveryBundle(window.localStorage), null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `petcare-recovery-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (recoveryMode) {
+    return <main className="app-shell"><section className="page-content"><h1>PetCare Recovery Mode</h1><p>โหมดนี้อ่านข้อมูลในเครื่องอย่างเดียว จะไม่เชื่อมต่อหรือเขียนข้อมูลลง Google Sheet</p><button type="button" className="primary" onClick={downloadRecovery}>ดาวน์โหลดไฟล์สำรองข้อมูล</button><small>หลังบันทึกไฟล์สำเร็จแล้ว จึงค่อยเปิด PetCare ตามปกติและนำไฟล์นี้เข้าเครื่องหลัก</small></section></main>
   }
 
   const settingsSurface = <SettingsSurface
