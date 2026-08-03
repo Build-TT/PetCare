@@ -50,6 +50,10 @@ async function defaultRender(source, maxDimension, quality) {
   canvas.height = targetHeight
   const context = canvas.getContext('2d')
   if (!context) throw new Error('Canvas ไม่พร้อมใช้งานในอุปกรณ์นี้')
+  // JPEG has no alpha channel, so a transparent PNG would flatten onto the
+  // canvas default (transparent black) and come back with a black background.
+  context.fillStyle = '#fff'
+  context.fillRect(0, 0, targetWidth, targetHeight)
   context.drawImage(image, 0, 0, targetWidth, targetHeight)
   return canvas.toDataURL('image/jpeg', quality)
 }

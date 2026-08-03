@@ -585,6 +585,37 @@ describe('chunked account_state', () => {
     expect(decodeAccountStateRows(undefined)).toBe('')
   })
 
+  it('never starts a chunk with a character Google Sheets reads as a formula', () => {
+    // Range.setValues treats a cell beginning with '=' or '+' as a formula and
+    // strips a leading apostrophe, so a boundary that lands there corrupts the
+    // chunk. The boundary has to back off, exactly like the surrogate rule.
+    const json = JSON.stringify({ note: `${'a'.repeat(44991)}${'='.repeat(5)}${'b'.repeat(60000)}` })
+    expect(json.charAt(ACCOUNT_STATE_CHUNK_SIZE)).toBe('=')
+
+    const rows = encodeAccountStateRows(json, timestamp)
+
+    expect(rows.length).toBeGreaterThan(2)
+    rows.slice(1).forEach(([, value]) => {
+      expect(['=', '+', "'"]).not.toContain(value.charAt(0))
+    })
+    rows.forEach(([, value]) => {
+      expect(value.length).toBeLessThanOrEqual(ACCOUNT_STATE_CHUNK_SIZE)
+      expect(value.length).toBeGreaterThanOrEqual(1)
+      const last = value.charCodeAt(value.length - 1)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+    })
+    expect(decodeAccountStateRows(rows)).toBe(json)
+  })
+
+  it('accepts a risky boundary rather than emptying a chunk on pathological content', () => {
+    const value = '='.repeat(ACCOUNT_STATE_CHUNK_SIZE + 2)
+
+    const rows = encodeAccountStateRows(value, timestamp)
+
+    expect(rows.every(row => row[1].length >= 1)).toBe(true)
+    expect(decodeAccountStateRows(rows)).toBe(value)
+  })
+
   it('writes one batchUpdate entry per chunk row and clears the rows after the last chunk', async () => {
     const fetchMock = vi.fn().mockImplementation((url) => ({
       ok: true,
@@ -600,7 +631,8 @@ describe('chunked account_state', () => {
     })
 
     const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))[1].body)
-    const chunks = accountStateChunks(body).filter(item => item.range !== 'app_state!A2:C2')
+    const entries = accountStateChunks(body).filter(item => item.range !== 'app_state!A2:C2')
+    const chunks = entries.filter(item => item.values[0][0] !== '')
     expect(chunks.length).toBeGreaterThanOrEqual(3)
     expect(chunks.map(item => item.range)).toEqual(chunks.map((_, index) => `app_state!A${index + 3}:C${index + 3}`))
     expect(chunks.map(item => item.values[0][0])).toEqual(['account_state', ...chunks.slice(1).map((_, index) => `account_state#${index + 2}`)])
@@ -611,12 +643,20 @@ describe('chunked account_state', () => {
     expect(blob.logs).toHaveLength(20)
     expect(blob.pets.map(pet => pet.id)).toEqual(['p1'])
 
-    const clear = fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
-    expect(clear[0]).toContain('/values:batchClear')
-    expect(JSON.parse(clear[1].body).ranges).toContain(`app_state!A${chunks.length + 3}:C42`)
+    // The stale tail is blanked inside the same batchUpdate, never by a second
+    // call: a child device polling Apps Script between the two would otherwise
+    // read fresh chunks followed by a stale one and fail JSON.parse.
+    const blanks = entries.filter(item => item.values[0][0] === '')
+    expect(blanks.map(item => item.range)).toEqual([`app_state!A${chunks.length + 3}:C42`])
+    expect(blanks[0].values.every(row => row.join('') === '')).toBe(true)
+    expect(blanks[0].values).toHaveLength(42 - (chunks.length + 3) + 1)
+    const clearedRanges = fetchMock.mock.calls
+      .filter(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
+      .flatMap(([, options]) => JSON.parse(options.body).ranges)
+    expect(clearedRanges.some(range => range.startsWith('app_state!'))).toBe(false)
   })
 
-  it('clears stale chunk rows even when a small state needs a single chunk', async () => {
+  it('blanks the stale chunk tail in the same write when a small state needs a single chunk', async () => {
     const fetchMock = vi.fn().mockImplementation((url) => ({
       ok: true,
       json: async () => url.includes('values:batchGet') ? emptyValueRanges() : { updated: true },
@@ -626,10 +666,12 @@ describe('chunked account_state', () => {
     await savePetCareState('token', 'sheet-1', { pets: [{ id: 'p1', name: 'Mochi' }], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] })
 
     const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))[1].body)
-    expect(accountStateChunks(body).map(item => item.range)).toEqual(['app_state!A2:C2', 'app_state!A3:C3'])
+    expect(accountStateChunks(body).map(item => item.range)).toEqual(['app_state!A2:C2', 'app_state!A3:C3', 'app_state!A4:C42'])
+    const blanks = body.data.find(item => item.range === 'app_state!A4:C42')
+    expect(blanks.values).toHaveLength(39)
+    expect(blanks.values.every(row => row.join('') === '')).toBe(true)
     const clearCalls = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
-    expect(clearCalls).toHaveLength(1)
-    expect(JSON.parse(clearCalls[0][1].body).ranges).toContain('app_state!A4:C42')
+    expect(clearCalls).toHaveLength(0)
   })
 
   it('loads a chunked account_state sheet, a legacy single-row sheet, and the ui_state fallback', async () => {

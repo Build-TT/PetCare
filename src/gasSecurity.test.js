@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
+import { encodeAccountStateRows } from './googleSheets.js'
 
 function makeGasSandbox({ properties = {}, fetchImpl, openById, sessionEmail = 'gas-owner@example.com', mailImpl } = {}) {
   const calls = []
@@ -544,6 +545,8 @@ function makeAppStateSheet(rows = []) {
   const grid = [APP_STATE_HEADER.slice(), ...rows.map(row => row.slice())]
   const clears = []
   const writes = []
+  const formats = []
+  const ops = []
   const cell = (row, col, value) => {
     while (grid.length < row) grid.push(['', '', ''])
     while (grid[row - 1].length < col) grid[row - 1].push('')
@@ -560,14 +563,21 @@ function makeAppStateSheet(rows = []) {
     grid,
     clears,
     writes,
+    formats,
+    ops,
     accountRows: () => grid.slice(1).filter(row => String(row[0]).indexOf('account_state') === 0),
     getLastRow: lastRow,
     getLastColumn: () => grid.reduce((max, row) => Math.max(max, row.length), 0),
     getDataRange: () => ({ getValues: () => grid.slice(0, lastRow()).map(row => row.slice()) }),
     getRange: (row, col, numRows, numCols) => ({
       getValues: () => grid.slice(row - 1, row - 1 + numRows).map(line => line.slice(col - 1, col - 1 + numCols)),
+      setNumberFormat: format => {
+        formats.push({ row, col, numRows, numCols, format })
+        ops.push('setNumberFormat')
+      },
       setValues: values => {
         writes.push({ row, col, numRows, numCols })
+        ops.push('setValues')
         values.forEach((line, i) => line.forEach((value, j) => cell(row + i, col + j, value)))
       },
       clearContent: () => {
@@ -652,6 +662,67 @@ describe('chunked account_state rows', () => {
     expect(sheet.grid[1]).toEqual(['ui_state', '{"tab":"logs"}', '2026-08-01T09:00'])
     expect(sheet.grid.slice(3, rowsBeforeShrink)).toEqual([['', '', ''], ['', '', ''], ['', '', '']])
     expect(sandbox.accountReadState().state.pets).toEqual(small.pets)
+  })
+
+  it('never starts a chunk with a character setValues would read as a formula', () => {
+    const { sandbox } = makeGasSandbox()
+    // Sheets turns a cell starting with '=' or '+' into a formula and strips a
+    // leading apostrophe, so a boundary landing there corrupts the chunk. Must
+    // match src/googleSheets.js encodeAccountStateRows exactly.
+    const json = JSON.stringify({ note: `${'a'.repeat(44991)}${'='.repeat(5)}${'b'.repeat(60000)}` })
+    expect(json.charAt(45000)).toBe('=')
+
+    const rows = sandbox.accountStateChunkRows(json, 'ts')
+
+    expect(rows.length).toBeGreaterThan(2)
+    rows.slice(1).forEach(row => expect(['=', '+', "'"]).not.toContain(String(row[1]).charAt(0)))
+    rows.forEach(row => {
+      const value = String(row[1])
+      expect(value.length).toBeLessThanOrEqual(45000)
+      expect(value.length).toBeGreaterThanOrEqual(1)
+      const last = value.charCodeAt(value.length - 1)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+    })
+    expect(rows.map(row => row[1]).join('')).toBe(json)
+    // Byte-identical to the browser encoder, boundary for boundary.
+    const web = encodeAccountStateRows(json, 'ts')
+    expect(rows).toEqual(web)
+  })
+
+  it('forces the chunk range to plain text before writing it', () => {
+    const sheet = makeAppStateSheet([['ui_state', '{"tab":"logs"}', '2026-08-01T09:00']])
+    const sandbox = makeAccountSandbox(sheet)
+
+    sandbox.accountSaveStateUnsafe({ pets: [{ id: 'p1', name: 'Mochi' }] }, null)
+
+    expect(sheet.formats).toHaveLength(1)
+    expect(sheet.formats[0]).toMatchObject({ row: 2, col: 1, numCols: 3, format: '@' })
+    expect(sheet.formats[0].numRows).toBe(sheet.writes[0].numRows)
+    expect(sheet.ops).toEqual(['setNumberFormat', 'setValues'])
+  })
+
+  it('refuses to save over a torn read instead of erasing the records it could not parse', () => {
+    const sheet = makeAppStateSheet([
+      ['ui_state', '{"tab":"logs"}', '2026-08-01T09:00'],
+      ['account_state', '{"pets":[{"id":"owner-pet"}', 'ts'],
+    ])
+    const sandbox = makeAccountSandbox(sheet)
+
+    expect(() => sandbox.accountSaveStateUnsafe({ pets: [{ id: 'child-pet' }] }, null))
+      .toThrow('ข้อมูลกลางกำลังอัปเดต')
+    expect(sheet.writes).toEqual([])
+    expect(sandbox.accountWriteNormalizedState).not.toHaveBeenCalled()
+    expect(sheet.grid[2][1]).toBe('{"pets":[{"id":"owner-pet"}')
+  })
+
+  it('still saves normally into an account that has no chunk rows at all', () => {
+    const sheet = makeAppStateSheet([['ui_state', '{"tab":"logs"}', '2026-08-01T09:00']])
+    const sandbox = makeAccountSandbox(sheet)
+
+    const saved = sandbox.accountSaveStateUnsafe({ pets: [{ id: 'first' }] }, null)
+
+    expect(saved.state.pets.map(pet => pet.id)).toEqual(['first'])
+    expect(sandbox.accountReadState().state.pets.map(pet => pet.id)).toEqual(['first'])
   })
 
   it('still reads a legacy sheet that holds the whole state in one row', () => {

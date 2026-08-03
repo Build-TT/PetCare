@@ -558,11 +558,19 @@ function accountStateChunks(json) {
   var chunks = [], index = 0
   while (index < value.length) {
     var end = Math.min(index + ACCOUNT_STATE_CHUNK_SIZE, value.length)
-    // Each chunk becomes its own cell, so a boundary landing inside a surrogate
-    // pair (any emoji) would store two lone surrogates and read back as U+FFFD.
-    // Give the high surrogate to the next chunk instead.
-    var last = value.charCodeAt(end - 1)
-    if (end < value.length && last >= 0xD800 && last <= 0xDBFF) end -= 1
+    // Each chunk becomes its own cell, so the boundary has to move left until
+    // both hazards are gone: ending on a high surrogate splits an emoji into
+    // two lone surrogates that read back as U+FFFD, and starting the *next*
+    // chunk with '=', '+' or "'" makes setValues store it as a formula (or eat
+    // the apostrophe). A chunk never shrinks below one character —
+    // pathological content keeps the risky boundary instead of looping forever.
+    while (end < value.length && end > index + 1) {
+      var last = value.charCodeAt(end - 1)
+      if (last >= 0xD800 && last <= 0xDBFF) { end -= 1; continue }
+      var next = value.charAt(end)
+      if (next === '=' || next === '+' || next === "'") { end -= 1; continue }
+      break
+    }
     chunks.push(value.slice(index, end))
     index = end
   }
@@ -619,7 +627,24 @@ function accountWriteStateRows(sh, json) {
   var values = kept.concat(accountStateChunkRows(json, nowIso()))
   var previousLastRow = Math.max(rows.length, sh.getLastRow())
   while (values.length < previousLastRow - 1) values.push(['', '', ''])
-  sh.getRange(2, 1, values.length, 3).setValues(values)
+  var range = sh.getRange(2, 1, values.length, 3)
+  // Belt and braces on top of the chunk-boundary rule: plain-text formatting
+  // stops Sheets from evaluating a chunk that still begins with '=' or '+'.
+  range.setNumberFormat('@')
+  range.setValues(values)
+}
+
+// True when the sheet still holds account_state data we failed to parse, which
+// is the difference between "this account is empty" and "we just read a write
+// in progress".
+function accountStateHasStoredChunks(sh) {
+  var rows = sh.getDataRange().getValues()
+  for (var i = 1; i < rows.length; i++) {
+    if (!accountStateChunkIndex(String(rows[i][0] || ''))) continue
+    var value = rows[i][1]
+    if (value !== undefined && value !== null && String(value) !== '') return true
+  }
+  return false
 }
 // --- Shared-Sheet three-way merge -------------------------------------------
 // A save used to clear every managed row and rewrite it from the calling
@@ -707,10 +732,18 @@ function accountSaveStateUnsafe(state, baseline) {
   if (!accountCanWrite(CURRENT_ACCOUNT_USER)) throw new Error('บัญชีนี้มีสิทธิ์อ่านอย่างเดียว ไม่สามารถบันทึกข้อมูลได้')
   setupSheets(CURRENT_ACCOUNT_USER.spreadsheet_id)
   var accountSpreadsheet = SpreadsheetApp.openById(CURRENT_ACCOUNT_USER.spreadsheet_id)
-  var persistedState = mergeSyncStates(baseline, state, accountReadState().state)
+  var stateSheet = accountStateSheet()
+  var currentState = accountReadState().state
+  // A null state normally means "empty account", and merging into it keeps the
+  // caller's snapshot verbatim — which then erases every record the snapshot
+  // does not carry. When the sheet clearly does hold chunk data we could not
+  // parse, that null is a torn read of somebody else's write, so fail the save
+  // retryably instead of destroying the owner's records.
+  if (currentState === null && accountStateHasStoredChunks(stateSheet)) throw new Error('ข้อมูลกลางกำลังอัปเดต กรุณาลองใหม่อีกครั้งในสักครู่')
+  var persistedState = mergeSyncStates(baseline, state, currentState)
   if (Array.isArray(persistedState.pets)) persistedState = Object.assign({}, persistedState, { pets: persistedState.pets.filter(function (pet) { return !pet.demo }) })
   accountWriteNormalizedState(persistedState, accountSpreadsheet)
-  accountWriteStateRows(accountStateSheet(), JSON.stringify(persistedState))
+  accountWriteStateRows(stateSheet, JSON.stringify(persistedState))
   return { status: 'ok', state: persistedState }
 }
 function accountSaveState(state, baseline) { return withAccountLock(function () { return accountSaveStateUnsafe(state, baseline) }) }

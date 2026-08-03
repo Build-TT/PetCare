@@ -77,11 +77,20 @@ export function encodeAccountStateRows(json, timestamp) {
   let index = 0
   while (index < value.length) {
     let end = Math.min(index + ACCOUNT_STATE_CHUNK_SIZE, value.length)
-    // Each chunk becomes its own cell, so a boundary that lands inside a
-    // surrogate pair (any emoji) would store two lone surrogates and come back
-    // as U+FFFD. Give the high surrogate back to the next chunk instead.
-    const last = value.charCodeAt(end - 1)
-    if (end < value.length && last >= 0xD800 && last <= 0xDBFF) end -= 1
+    // Each chunk becomes its own cell, so the boundary has to move left until
+    // both hazards are gone: ending on a high surrogate splits an emoji into
+    // two lone surrogates that read back as U+FFFD, and starting the *next*
+    // chunk with '=', '+' or "'" makes Apps Script's setValues store it as a
+    // formula (or eat the apostrophe). A chunk never shrinks below one
+    // character — pathological content keeps the risky boundary instead of
+    // looping forever.
+    while (end < value.length && end > index + 1) {
+      const last = value.charCodeAt(end - 1)
+      if (last >= 0xD800 && last <= 0xDBFF) { end -= 1; continue }
+      const next = value.charAt(end)
+      if (next === '=' || next === '+' || next === "'") { end -= 1; continue }
+      break
+    }
     chunks.push(value.slice(index, end))
     index = end
   }
@@ -707,6 +716,21 @@ export async function savePetCareState(accessToken, spreadsheetId, state, baseli
     const rowNumber = index + 3
     data.push({ range: `app_state!A${rowNumber}:C${rowNumber}`, majorDimension: 'ROWS', values: [row] })
   })
+  // A state that shrinks writes fewer chunks than the previous save, so the
+  // leftover rows must go or a reader would append stale trailing JSON. They
+  // are blanked inside this same batchUpdate, never by a follow-up batchClear:
+  // Apps Script serves accountReadState outside the account lock, so an invited
+  // device polling between two calls would read fresh chunks followed by a
+  // stale one, fail JSON.parse and report "no data". Blank rows are ignored by
+  // both decoders. Rows 1 and 2 (headers, ui_state) are never touched.
+  const firstBlankChunkRow = accountRows.length + 3
+  if (firstBlankChunkRow <= ACCOUNT_STATE_LAST_ROW) {
+    data.push({
+      range: `app_state!A${firstBlankChunkRow}:C${ACCOUNT_STATE_LAST_ROW}`,
+      majorDimension: 'ROWS',
+      values: Array.from({ length: ACCOUNT_STATE_LAST_ROW - firstBlankChunkRow + 1 }, () => ['', '', '']),
+    })
+  }
   await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
     method: 'POST',
     headers: authHeaders(accessToken),
@@ -730,11 +754,6 @@ export async function savePetCareState(accessToken, spreadsheetId, state, baseli
       return `${name}!${column}${startRow}:${column}${endRow}`
     })
   })
-  // A state that shrinks writes fewer chunks than the previous save, so the
-  // leftover rows must go or a reader would append stale trailing JSON. Rows 1
-  // and 2 (headers, ui_state) are never touched.
-  const firstStaleChunkRow = accountRows.length + 3
-  if (firstStaleChunkRow <= ACCOUNT_STATE_LAST_ROW) staleRanges.push(`app_state!A${firstStaleChunkRow}:C${ACCOUNT_STATE_LAST_ROW}`)
   if (staleRanges.length > 0) {
     await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`, {
       method: 'POST',
