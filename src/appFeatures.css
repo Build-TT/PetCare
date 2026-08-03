@@ -1,5 +1,15 @@
 .quick { display: none; }
 
+/* Mobile browsers bind an overscroll-past-the-top gesture to a full page
+   reload ("pull to refresh"). This app keeps unsaved work in memory for up
+   to a few seconds (debounced Google Sheet save) and only ever asks the
+   user to reload deliberately (Settings), so an accidental native reload
+   mid-edit is pure data loss with no recovery path. Containing the
+   overscroll at the document boundary stops the browser from ever treating
+   the gesture as a refresh request, while the app's own scrolling is
+   unaffected. */
+html, body { overscroll-behavior-y: contain; }
+
 .google-onboarding-backdrop {
   position: fixed;
   z-index: 30;
