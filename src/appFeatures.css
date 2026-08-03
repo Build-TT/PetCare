@@ -262,14 +262,16 @@ html, body { overscroll-behavior-y: contain; }
 
 .trend-bars {
   min-width: 100%;
-  /* Monthly view can have up to 31 bars; each keeps a 5px floor (below)
-     so it stays tappable, which adds up to more than a narrow phone's
-     width. Scrolling the overflow horizontally keeps every bar readable
-     instead of letting the row bleed past the screen edge. */
+  /* Monthly view renders up to 31 bars. A tight 2px gap and a 4px floor
+     per bar (below) fit all 31 within even a narrow phone's width with
+     room to spare, so the row never needs to scroll in practice;
+     overflow-x stays auto only as a safety net for screens narrower
+     than any phone this app targets. */
+  gap: 2px;
   overflow-x: auto;
   overflow-y: visible;
 }
-.trend-bars div { min-width: 5px; }
+.trend-bars div { min-width: 4px; }
 .trend-bars span { font-size: 8px; transform: rotate(-45deg); transform-origin: center; }
 
 .bars { padding-top: 14px; }
