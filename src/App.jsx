@@ -6,7 +6,7 @@ import ReminderForm from './components/ReminderForm.jsx'
 import GoogleDriveOnboarding from './components/GoogleDriveOnboarding.jsx'
 import { SYNC_BASELINE_KEY, hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, snapshotBaseline, unwrapPendingState } from './remoteState.js'
 import { provisionGoogleLineLink } from './gasProvisioning.js'
-import { ensureGoogleAccessToken, getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
+import { clearGoogleTokenCache, ensureGoogleAccessToken, getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
 import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
 import { exportLocalRecoveryBundle } from './sync/recovery.js'
 import { isRecoveryMode } from './sync/recoveryMode.js'
@@ -250,15 +250,20 @@ async function resolveGoogleToken(connection) {
   return connection.mode === 'account' ? connection.accessToken : ensureGoogleAccessToken({ email: connection.email })
 }
 
-// A 401 from Sheets/Drive most often means the resolved token just expired
-// between renewal and use. Retry exactly once with a freshly renewed token
-// before surfacing the error to the sync UI.
-async function withGoogleTokenRetry(connection, action) {
+// A 401 from Sheets/Drive is not necessarily an expired-by-TTL token —
+// ensureGoogleAccessToken happily returns the cached token whenever it still
+// looks like it has enough TTL left, but a session can be invalidated early
+// (revoked consent, password change) without that TTL ever running out.
+// Clearing the cache first forces the retry's ensureGoogleAccessToken to
+// perform a real silent re-request instead of handing back the same dead
+// token and failing identically.
+export async function withGoogleTokenRetry(connection, action) {
   const token = await resolveGoogleToken(connection)
   try {
     return await action(token)
   } catch (error) {
     if (connection.mode !== 'account' && String(error?.message || '').includes('401')) {
+      clearGoogleTokenCache()
       const retryToken = await ensureGoogleAccessToken({ email: connection.email })
       return action(retryToken)
     }
@@ -437,13 +442,20 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
 
   // One-time migration: photos saved before compression was added can still
   // be full-resolution data URLs large enough to blow the Google Sheets cell
-  // limit. Recompress any oversized ones once per mount; the guard ref keeps
-  // this from re-running (including React StrictMode's double-invoke) and
-  // from looping on the setPets it performs.
+  // limit. Recompress any oversized ones once per mount; the guard ref is
+  // what makes this one-shot, not a `cancelled`-style abort. React
+  // StrictMode double-invokes mount effects in development (mount ->
+  // cleanup -> mount again); a `cancelled` flag set by the first run's
+  // cleanup would poison that same run's still-in-flight async work and the
+  // second run would then find the ref already set and skip entirely — so
+  // the migration would never complete under StrictMode (or ever get
+  // manually verified in dev). Not tearing anything down on cleanup, and
+  // relying on the functional setPets update, keeps this correct: the ref
+  // guarantees only the first run's async work ever starts, and that run is
+  // free to finish and apply its result whenever it resolves.
   useEffect(() => {
     if (recoveryMode || isReader || photoMigrationRanRef.current) return undefined
     photoMigrationRanRef.current = true
-    let cancelled = false
     const migrateOversizedPhotos = async () => {
       const targets = pets.filter(pet => !pet.demo && typeof pet.photo === 'string' && pet.photo.length > PHOTO_MIGRATION_THRESHOLD)
       if (!targets.length) return
@@ -454,13 +466,11 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           return { id: pet.id, photo: pet.photo }
         }
       }))
-      if (cancelled) return
       const changed = new Map(results.filter(result => result.photo !== targets.find(pet => pet.id === result.id)?.photo).map(result => [result.id, result.photo]))
       if (!changed.size) return
       setPets(current => current.map(pet => changed.has(pet.id) ? { ...pet, photo: changed.get(pet.id) } : pet))
     }
     migrateOversizedPhotos().catch(() => undefined)
-    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {

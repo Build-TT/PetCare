@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { loadRemoteStateMock, saveRemoteStateMock, requestGoogleAccessTokenMock, ensureGoogleAccessTokenMock, getGoogleUserProfileMock, createSheetMock } = vi.hoisted(() => ({
+const { loadRemoteStateMock, saveRemoteStateMock, requestGoogleAccessTokenMock, ensureGoogleAccessTokenMock, clearGoogleTokenCacheMock, getGoogleUserProfileMock, createSheetMock } = vi.hoisted(() => ({
   loadRemoteStateMock: vi.fn(),
   saveRemoteStateMock: vi.fn(),
   requestGoogleAccessTokenMock: vi.fn(),
   ensureGoogleAccessTokenMock: vi.fn(),
+  clearGoogleTokenCacheMock: vi.fn(),
   getGoogleUserProfileMock: vi.fn(),
   createSheetMock: vi.fn(),
 }))
@@ -19,6 +20,7 @@ vi.mock('./googleAuth.js', () => ({
   loadGoogleIdentityServices: () => Promise.resolve(),
   requestGoogleAccessToken: requestGoogleAccessTokenMock,
   ensureGoogleAccessToken: ensureGoogleAccessTokenMock,
+  clearGoogleTokenCache: clearGoogleTokenCacheMock,
   getGoogleUserProfile: getGoogleUserProfileMock,
 }))
 vi.mock('./googleSheets.js', () => ({ createOrFindPetCareSheet: createSheetMock, listPetCareSheets: vi.fn().mockResolvedValue([]) }))
