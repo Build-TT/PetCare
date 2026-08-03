@@ -6,10 +6,11 @@ import ReminderForm from './components/ReminderForm.jsx'
 import GoogleDriveOnboarding from './components/GoogleDriveOnboarding.jsx'
 import { SYNC_BASELINE_KEY, hydrateRemoteState, isCurrentRemoteRevision, loadRemoteState, saveRemoteState, snapshotBaseline, unwrapPendingState } from './remoteState.js'
 import { provisionGoogleLineLink } from './gasProvisioning.js'
-import { getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
+import { ensureGoogleAccessToken, getGoogleUserProfile, requestGoogleAccessToken } from './googleAuth.js'
 import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
 import { exportLocalRecoveryBundle } from './sync/recovery.js'
 import { isRecoveryMode } from './sync/recoveryMode.js'
+import { compressPhotoToDataUrl } from './photo.js'
 import './index.css'
 import './appFeatures.css'
 
@@ -33,6 +34,10 @@ const LOCAL_STATE_KEY = 'petcare.local.v1'
 const REMOTE_OUTBOX_KEY = 'petcare.remote-outbox.v1'
 const GOOGLE_SHEET_META_KEY = 'petcare.google-sheet.v1'
 const GOOGLE_ONBOARDING_KEY = 'petcare.google-drive-onboarding.v1'
+// Above this length a base64 photo starts crowding the Google Sheets cell
+// limit; the one-time migration effect recompresses anything already stored
+// past this size.
+const PHOTO_MIGRATION_THRESHOLD = 45000
 const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
 // Exported so the layout test can assert the bottom-nav CSS grid always has a
 // column per button; a mismatch silently pushes the last item off screen.
@@ -235,6 +240,32 @@ function migrateLegacyOwners(state) {
   }), { ...state })
 }
 
+// Account-mode connections carry their own long-lived session token and
+// ignore the accessToken argument entirely (see remoteState.js), so they are
+// passed through untouched. Google-mode connections only ever hold a
+// short-lived OAuth token that can expire between renders; resolving it
+// through ensureGoogleAccessToken right before use renews it silently when
+// needed instead of handing the sync call a stale token.
+async function resolveGoogleToken(connection) {
+  return connection.mode === 'account' ? connection.accessToken : ensureGoogleAccessToken({ email: connection.email })
+}
+
+// A 401 from Sheets/Drive most often means the resolved token just expired
+// between renewal and use. Retry exactly once with a freshly renewed token
+// before surfacing the error to the sync UI.
+async function withGoogleTokenRetry(connection, action) {
+  const token = await resolveGoogleToken(connection)
+  try {
+    return await action(token)
+  } catch (error) {
+    if (connection.mode !== 'account' && String(error?.message || '').includes('401')) {
+      const retryToken = await ensureGoogleAccessToken({ email: connection.email })
+      return action(retryToken)
+    }
+    throw error
+  }
+}
+
 function App({ initialPage = 'home', accountSession = null, role = accountSession?.user?.role, onLogout = null }) {
   const recoveryMode = isRecoveryMode(window.location)
   const initial = migrateLegacyOwners(loadStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks: seedTracks, logs: seedLogs, activities: seedActivities, reminders: defaultReminders, symptoms: defaultSymptoms, pets: defaultPets, treatmentHistory: defaultTreatmentHistory, lineRecipients: defaultLineRecipients }))
@@ -287,6 +318,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const [syncError, setSyncError] = useState('')
   const remoteRevisionRef = useRef(0)
   const remoteSaveQueueRef = useRef(Promise.resolve())
+  const photoMigrationRanRef = useRef(false)
   const formContextRef = useRef(null)
   // Latest persisted collections, so the background refresh can merge without
   // re-subscribing its listener on every keystroke.
@@ -403,6 +435,34 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     saveStoredState(window.localStorage, LOCAL_STATE_KEY, { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedActivePetId })
   }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, isReader, recoveryMode])
 
+  // One-time migration: photos saved before compression was added can still
+  // be full-resolution data URLs large enough to blow the Google Sheets cell
+  // limit. Recompress any oversized ones once per mount; the guard ref keeps
+  // this from re-running (including React StrictMode's double-invoke) and
+  // from looping on the setPets it performs.
+  useEffect(() => {
+    if (recoveryMode || isReader || photoMigrationRanRef.current) return undefined
+    photoMigrationRanRef.current = true
+    let cancelled = false
+    const migrateOversizedPhotos = async () => {
+      const targets = pets.filter(pet => !pet.demo && typeof pet.photo === 'string' && pet.photo.length > PHOTO_MIGRATION_THRESHOLD)
+      if (!targets.length) return
+      const results = await Promise.all(targets.map(async pet => {
+        try {
+          return { id: pet.id, photo: await compressPhotoToDataUrl(pet.photo) }
+        } catch {
+          return { id: pet.id, photo: pet.photo }
+        }
+      }))
+      if (cancelled) return
+      const changed = new Map(results.filter(result => result.photo !== targets.find(pet => pet.id === result.id)?.photo).map(result => [result.id, result.photo]))
+      if (!changed.size) return
+      setPets(current => current.map(pet => changed.has(pet.id) ? { ...pet, photo: changed.get(pet.id) } : pet))
+    }
+    migrateOversizedPhotos().catch(() => undefined)
+    return () => { cancelled = true }
+  }, [])
+
   useEffect(() => {
     if (recoveryMode || isReader) return undefined
     if (!googleConnection || !remoteReady) return undefined
@@ -421,7 +481,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
       const queuedSave = remoteSaveQueueRef.current
         .catch(() => undefined)
-        .then(() => saveRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, pendingState, googleConnection, baseline))
+        .then(() => withGoogleTokenRetry(googleConnection, token => saveRemoteState(token, googleConnection.spreadsheetId, pendingState, googleConnection, baseline)))
       remoteSaveQueueRef.current = queuedSave
       queuedSave
         .then(() => {
@@ -810,7 +870,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           await handleGoogleConnected({ ...rememberedGoogleSheet, mode: 'account', accountToken: accountSession.session_token, accessToken: '' })
           return
         }
-        const accessToken = await requestGoogleAccessToken({ prompt: 'none' })
+        const accessToken = await requestGoogleAccessToken({ prompt: 'none', loginHint: rememberedGoogleSheet?.email || '' })
         const profile = await getGoogleUserProfile(accessToken)
         if (cancelled) return
         const connection = {
@@ -848,7 +908,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     const refreshFromRemote = async () => {
       if (document.visibilityState !== 'visible') return
       try {
-        const remote = await loadRemoteState(googleConnection.accessToken, googleConnection.spreadsheetId, googleConnection)
+        const remote = await withGoogleTokenRetry(googleConnection, token => loadRemoteState(token, googleConnection.spreadsheetId, googleConnection))
         if (!remote) return
         const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
         const merged = migrateLegacyOwners(hydrateRemoteState(remote, currentStateRef.current, null, baseline))
@@ -893,9 +953,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const handleProfilePhoto = event => {
     const file = event.target.files?.[0]
     if (!file || !file.type.startsWith('image/')) return
-    const reader = new FileReader()
-    reader.onload = () => setProfilePhoto(String(reader.result || ''))
-    reader.readAsDataURL(file)
+    compressPhotoToDataUrl(file).then(dataUrl => setProfilePhoto(dataUrl)).catch(() => undefined)
   }
 
   useEffect(() => {

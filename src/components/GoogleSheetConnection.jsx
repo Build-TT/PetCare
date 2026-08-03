@@ -90,7 +90,7 @@ export default function GoogleSheetConnection({ onConnected, onProvisionLine, on
   const sheetPicker = showSheets && <div className="google-sheet-picker" aria-label="เลือก Google Sheet เดิม">
     {sheets.length ? sheets.map(sheet => <button key={sheet.spreadsheetId} type="button" className="google-sheet-option" onClick={() => connect(false, sheet.spreadsheetId)} disabled={busy}>
       <span><b>{sheet.name}</b><small>{sheet.modifiedTime ? new Date(sheet.modifiedTime).toLocaleDateString('th-TH') : 'Google Sheet'}</small></span><strong>ใช้ Sheet นี้</strong>
-    </button>) : <small>ยังไม่พบ Sheet ที่ชื่อเกี่ยวกับ PetCare ใน Google Drive</small>}
+    </button>) : <small>ยังไม่พบ Sheet ที่ชื่อเกี่ยวกับ PetCare ใน Google Drive — ถ้าคุณได้รับการแชร์จากคนอื่น ไม่ต้องเลือก Sheet ที่นี่ ให้ออกจากระบบแล้วเข้าสู่ระบบด้วย Google ด้วยอีเมลที่ถูกเชิญ ระบบจะเปิดข้อมูลที่แชร์ให้อัตโนมัติ</small>}
     {!connection && !showConsent && <button type="button" className="text-button" onClick={() => connect(true)} disabled={busy}>สร้าง Sheet ใหม่</button>}
   </div>
 
