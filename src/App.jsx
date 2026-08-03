@@ -145,8 +145,8 @@ function Summary({ logs, symptoms = defaultSymptoms, onEdit, onDelete, showRecor
       {granularity === 'monthly' && <label>เดือน<input aria-label="เดือนที่ต้องการ" type="month" value={selectedMonth} onChange={event => setSelectedMonth(event.target.value)} /></label>}
       {granularity === 'yearly' && <label>ปี ค.ศ.<input aria-label="ปีที่ต้องการ" type="number" min="2000" max="2100" value={selectedYear} onChange={event => setSelectedYear(event.target.value)} /></label>}
     </div>
-    <section className="insight" aria-label={trendTitle}><b>{trendTitle}</b><p>รวม {visible.length} รายการในช่วงที่เลือก</p><div className="bars trend-bars">{trend.map(item => <div key={item.label} className={item.value ? 'hot' : ''} title={`${item.label}: ${item.value} ครั้ง`} style={{ height: `${Math.max(8, item.value / trendMax * 100)}%` }}><span>{item.label}</span></div>)}</div></section>
-    <section className="insight" aria-label={frequentWindowTitle}><b>{frequentWindowTitle}</b><p>{summary.mostFrequentWindow ? `${String(summary.mostFrequentWindow.startHour).padStart(2, '0')}:00–${String(summary.mostFrequentWindow.endHour).padStart(2, '0')}:00 · ${summary.mostFrequentWindow.count} ครั้ง` : 'ยังไม่มีข้อมูลอาการ'}</p><div className="bars">{values.map((value, i) => <div key={labels[i]} className={i === 3 ? 'hot' : ''} style={{ height: `${Math.max(8, value / max * 100)}%` }}><span>{labels[i]}</span></div>)}</div></section>
+    <section className="insight" aria-label={trendTitle}><b>{trendTitle}</b><p>รวม {visible.length} รายการในช่วงที่เลือก</p><div className="bars trend-bars">{trend.map(item => <div key={item.label} className={item.value ? 'hot' : ''} title={`${item.label}: ${item.value} ครั้ง`} style={{ height: `${Math.max(8, item.value / trendMax * 100)}%` }}>{item.value > 0 && <i>{item.value}</i>}<span>{item.label}</span></div>)}</div></section>
+    <section className="insight" aria-label={frequentWindowTitle}><b>{frequentWindowTitle}</b><p>{summary.mostFrequentWindow ? `${String(summary.mostFrequentWindow.startHour).padStart(2, '0')}:00–${String(summary.mostFrequentWindow.endHour).padStart(2, '0')}:00 · ${summary.mostFrequentWindow.count} ครั้ง` : 'ยังไม่มีข้อมูลอาการ'}</p><div className="bars">{values.map((value, i) => <div key={labels[i]} className={i === 3 ? 'hot' : ''} style={{ height: `${Math.max(8, value / max * 100)}%` }}>{value > 0 && <i>{value}</i>}<span>{labels[i]}</span></div>)}</div></section>
     {showRecords && <><div className="section-title"><h2>รายการบันทึก</h2><small>ตามตัวกรองด้านบน</small></div>
       <div className="data-table"><div className="table-head"><span>วัน / เวลา</span><span>รายการ + Track ณ เวลานั้น</span><span /></div>{visible.map(log => <div className="table-row" key={log.id}><time>{new Date(log.datetime).toLocaleDateString('th-TH')}<br />{log.datetime.slice(11, 16)}</time><div><b>{log.symptom}{log.diary ? ` · ${log.diary}` : ''}</b>{(log.tracks || []).map(track => <em key={track.id}>{track.name} · {track.dose} · {track.schedule}</em>)}</div><div className="row-actions"><button onClick={() => onEdit(log)}>แก้ไข</button><button className="danger" onClick={() => onDelete(log.id)}>ลบ</button></div></div>)}</div></>}
   </>
@@ -195,7 +195,7 @@ function DailyRecords({ logs, activities, onEditLog, onDeleteLog }) {
     <div className="section-title"><h2>รายการบันทึก</h2><small>{days.length} วัน</small></div>
     <div className="daily-filter" aria-label="กรองช่วงวันที่">
       <label>ตั้งแต่<input aria-label="วันที่เริ่มต้น" type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} /></label>
-      <span aria-hidden="true">ถึง</span>
+      <span aria-hidden="true">-</span>
       <label>ถึง<input aria-label="วันที่สิ้นสุด" type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} /></label>
       {(dateFrom || dateTo) && <button className="text-button" onClick={clearDates}>ล้างตัวกรอง</button>}
     </div>
@@ -411,7 +411,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
 
   useEffect(() => {
     if (page !== 'track' || trackTab !== 'track') return
-    setSelectedTracks(activeTracks.map(track => track.id))
+    setSelectedTracks([])
   }, [page, trackTab, activePetId])
 
   const clearTrackDraft = () => {

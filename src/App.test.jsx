@@ -109,15 +109,15 @@ describe('PetCare shell and restructuring', () => {
     expect(screen.getByRole('dialog', { name: 'ฟอร์มรายการติดตาม' })).toBeTruthy()
   })
 
-  it('migrates unscoped legacy records and resets draft selections on pet switch', async () => {
+  it('migrates unscoped legacy records and leaves Track selections unselected by default', async () => {
     window.localStorage.setItem('petcare.local.v1', JSON.stringify({ ...state({ logs: [{ id: 'l1', datetime: '2026-07-17T08:00', symptom: 'legacy', tracks: [] }], tracks: [{ id: 't1', name: 'legacy', active: true, schedule: 'daily' }], symptoms: [{ id: 's1', label_th: 'legacy' }] }), pets: [{ id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' }] }))
     render(<App />)
     await waitFor(() => expect(JSON.parse(localStorage.getItem('petcare.local.v1')).logs[0].pet_id).toBe('p1'))
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
-    // Active tracking items open preselected, so this click clears the draft
-    // selection rather than making one.
-    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(true)
+    // Nothing is preselected when entering the track page.
+    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(false)
     fireEvent.click(screen.getByRole('checkbox', { name: 'เลือก legacy' }))
+    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'จัดการโปรไฟล์สัตว์เลี้ยง' }))
     fireEvent.click(screen.getByRole('button', { name: /Two/ }))
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
@@ -125,8 +125,35 @@ describe('PetCare shell and restructuring', () => {
     fireEvent.click(screen.getByRole('button', { name: 'จัดการโปรไฟล์สัตว์เลี้ยง' }))
     fireEvent.click(screen.getByRole('button', { name: /One/ }))
     fireEvent.click(screen.getByRole('button', { name: 'สมุดบันทึก' }))
-    // Switching pets discards the manual deselection instead of carrying it over.
-    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(true)
+    // Switching pets resets to unselected instead of carrying over the earlier tap.
+    expect(screen.getByRole('checkbox', { name: 'เลือก legacy' }).checked).toBe(false)
+  })
+
+  it('shows the count above each non-zero bar in the home charts', () => {
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    window.localStorage.setItem('petcare.local.v1', JSON.stringify(state({
+      logs: [{ id: 'l1', pet_id: 'p1', datetime: `${today}T08:00`, symptom: 'ไอ', symptoms: ['ไอ'], diary: '', tracks: [] }],
+    })))
+    render(<App />)
+    const bars = document.querySelectorAll('.bars')
+    expect(bars).toHaveLength(2)
+    for (const section of bars) {
+      const count = within(section).getByText('1')
+      expect(count.tagName).toBe('I')
+      expect(within(section).queryByText('0')).toBeNull()
+    }
+  })
+
+  it('replaces the redundant "ถึง" separator between the two date filter inputs with a dash', () => {
+    window.localStorage.setItem('petcare.local.v1', JSON.stringify(state({
+      logs: [{ id: 'l1', pet_id: 'p1', datetime: '2026-07-17T08:00', symptom: 'ไอ', symptoms: ['ไอ'], tracks: [] }],
+    })))
+    render(<App />)
+    const filter = screen.getByLabelText('กรองช่วงวันที่')
+    expect(filter.querySelector('span[aria-hidden="true"]').textContent).toBe('-')
+    expect(within(filter).getByLabelText('ตั้งแต่')).toBeTruthy()
+    expect(within(filter).getByLabelText('ถึง')).toBeTruthy()
   })
 
   it('uses app-native species icons and small gender accessories', () => {
