@@ -532,3 +532,124 @@ describe('GAS security behavior', () => {
     expect(() => sandbox.sendLine('test', ['recipient'])).toThrow('LINE delivery failed')
   })
 })
+
+// A Google Sheets cell holds at most 50 000 characters, so account_state is
+// written across as many rows as it needs. The browser writes the same rows
+// (src/googleSheets.js encodeAccountStateRows/decodeAccountStateRows); a device
+// syncing through Apps Script has to read and write byte-identical rows or the
+// two clients hand each other truncated JSON.
+const APP_STATE_HEADER = ['key', 'value', 'updated_at']
+
+function makeAppStateSheet(rows = []) {
+  const grid = [APP_STATE_HEADER.slice(), ...rows.map(row => row.slice())]
+  const clears = []
+  const writes = []
+  const cell = (row, col, value) => {
+    while (grid.length < row) grid.push(['', '', ''])
+    while (grid[row - 1].length < col) grid[row - 1].push('')
+    grid[row - 1][col - 1] = value
+  }
+  return {
+    grid,
+    clears,
+    writes,
+    accountRows: () => grid.slice(1).filter(row => String(row[0]).indexOf('account_state') === 0),
+    getLastRow: () => grid.length,
+    getLastColumn: () => grid.reduce((max, row) => Math.max(max, row.length), 0),
+    getDataRange: () => ({ getValues: () => grid.map(row => row.slice()) }),
+    getRange: (row, col, numRows, numCols) => ({
+      getValues: () => grid.slice(row - 1, row - 1 + numRows).map(line => line.slice(col - 1, col - 1 + numCols)),
+      setValues: values => {
+        writes.push({ row, col, numRows, numCols })
+        values.forEach((line, i) => line.forEach((value, j) => cell(row + i, col + j, value)))
+      },
+      clearContent: () => {
+        clears.push({ row, col, numRows, numCols })
+        for (let i = 0; i < numRows; i += 1) for (let j = 0; j < numCols; j += 1) cell(row + i, col + j, '')
+      },
+    }),
+  }
+}
+
+function makeAccountSandbox(sheet) {
+  const { sandbox } = makeGasSandbox({ openById: () => ({ getSheetByName: name => (name === 'app_state' ? sheet : null) }) })
+  sandbox.CURRENT_ACCOUNT_USER = { role: 'writer', spreadsheet_id: 'sheet-1' }
+  sandbox.setupSheets = vi.fn()
+  sandbox.accountWriteNormalizedState = vi.fn()
+  return sandbox
+}
+
+describe('chunked account_state rows', () => {
+  it('splits a state past the cell limit across rows and reads it back whole', () => {
+    const sheet = makeAppStateSheet([['ui_state', '{"tab":"logs"}', '2026-08-01T09:00']])
+    const sandbox = makeAccountSandbox(sheet)
+    // Land the emoji exactly on the 45 000-character boundary: a naive split
+    // stores two lone surrogates in different cells and reads back as U+FFFD.
+    const noteFor = pad => 'x'.repeat(pad) + '🐶' + 'y'.repeat(60000)
+    const stateFor = pad => ({ pets: [{ id: 'p1', name: 'Mochi', note: noteFor(pad) }] })
+    const emojiAt = JSON.stringify(stateFor(0)).indexOf('🐶')
+    const state = stateFor(45000 - 1 - emojiAt)
+    const json = JSON.stringify(state)
+    expect(json.charCodeAt(44999)).toBeGreaterThanOrEqual(0xD800)
+
+    const saved = sandbox.accountSaveStateUnsafe(state, null)
+    expect(saved.state.pets[0].note).toBe(state.pets[0].note)
+
+    const written = sheet.accountRows()
+    expect(written.length).toBeGreaterThan(1)
+    expect(written.map(row => row[0])).toEqual(written.map((row, index) => (index === 0 ? 'account_state' : `account_state#${index + 1}`)))
+    written.forEach(row => expect(String(row[1]).length).toBeLessThanOrEqual(45000))
+    expect(String(written[0][1]).length).toBe(44999)
+    expect(sheet.grid[1]).toEqual(['ui_state', '{"tab":"logs"}', '2026-08-01T09:00'])
+
+    const read = sandbox.accountReadState()
+    expect(read.status).toBe('ok')
+    expect(read.state.pets[0].note).toBe(state.pets[0].note)
+    expect(read.state.pets[0].note).not.toContain(String.fromCharCode(0xFFFD))
+  })
+
+  it('orders chunks numerically, not alphabetically', () => {
+    const json = JSON.stringify({ pets: [], activePetId: 'p1' })
+    const parts = []
+    for (let i = 0; i < json.length; i += 3) parts.push(json.slice(i, i + 3))
+    expect(parts.length).toBeGreaterThan(9)
+    const rows = parts.map((part, index) => [index === 0 ? 'account_state' : `account_state#${index + 1}`, part, 'ts'])
+    const sheet = makeAppStateSheet([...rows].reverse())
+    const sandbox = makeAccountSandbox(sheet)
+    expect(sandbox.accountReadState().state).toEqual({ pets: [], activePetId: 'p1' })
+  })
+
+  it('leaves no stale chunk rows behind when the state shrinks', () => {
+    const sheet = makeAppStateSheet([['ui_state', '{"tab":"logs"}', '2026-08-01T09:00']])
+    const sandbox = makeAccountSandbox(sheet)
+    sandbox.accountSaveStateUnsafe({ pets: [{ id: 'p1', name: 'Mochi', note: 'z'.repeat(140000) }] }, null)
+    expect(sheet.accountRows().length).toBeGreaterThan(2)
+
+    const small = { pets: [{ id: 'p2', name: 'Tiny' }] }
+    const saved = sandbox.accountSaveStateUnsafe(small, { pets: { p1: '' } })
+    expect(saved.state.pets.map(pet => pet.id)).toEqual(['p2'])
+
+    expect(sheet.accountRows().map(row => row[0])).toEqual(['account_state'])
+    expect(sheet.grid.slice(1).filter(row => String(row[0]))).toHaveLength(2)
+    expect(sheet.grid[1]).toEqual(['ui_state', '{"tab":"logs"}', '2026-08-01T09:00'])
+    expect(sandbox.accountReadState().state.pets).toEqual(small.pets)
+  })
+
+  it('still reads a legacy sheet that holds the whole state in one row', () => {
+    const legacy = { pets: [{ id: 'p1', name: 'Mochi' }, { id: 'demo', demo: true }], activePetId: 'p1' }
+    const sheet = makeAppStateSheet([
+      ['ui_state', '{"tab":"logs"}', '2026-08-01T09:00'],
+      ['account_state', JSON.stringify(legacy), '2026-08-01T09:00'],
+    ])
+    const sandbox = makeAccountSandbox(sheet)
+    const read = sandbox.accountReadState()
+    expect(read.state.pets.map(pet => pet.id)).toEqual(['p1'])
+    expect(read.state.activePetId).toBe('p1')
+  })
+
+  it('reports no state when the reassembled rows are not valid JSON', () => {
+    const sheet = makeAppStateSheet([['account_state', '{"pets":[', 'ts'], ['account_state#2', '{{broken', 'ts']])
+    const sandbox = makeAccountSandbox(sheet)
+    expect(sandbox.accountReadState()).toEqual({ status: 'ok', state: null })
+  })
+})

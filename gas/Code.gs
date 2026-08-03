@@ -57,7 +57,7 @@ var GAS_WEBHOOK_SECRET = 'GAS_WEBHOOK_SECRET'
 var ACCOUNT_USERS_PROPERTY = 'PETCARE_ACCOUNT_USERS'
 var ACCOUNT_SESSIONS_PROPERTY = 'PETCARE_ACCOUNT_SESSIONS'
 var ACCOUNT_THROTTLE_PROPERTY = 'PETCARE_ACCOUNT_LOGIN_THROTTLE'
-var PETCARE_BACKEND_VERSION = '2026.08.02.2'
+var PETCARE_BACKEND_VERSION = '2026.08.03.1'
 var CURRENT_ACCOUNT_USER = null
 
 var DEFAULT_LOG_TYPES = [
@@ -536,16 +536,84 @@ function accountWriteNormalizedState(state, spreadsheet) {
     if (plan.rows.length > 0) plan.sh.getRange(2, 1, plan.rows.length, plan.headers.length).setValues(plan.rows)
   })
 }
-function accountReadState() {
-  var rows = accountStateSheet().getDataRange().getValues()
-  for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state' && rows[i][1]) {
-    try {
-      var state = JSON.parse(rows[i][1])
-      if (state && Array.isArray(state.pets)) state.pets = state.pets.filter(function (pet) { return !pet.demo })
-      return { status: 'ok', state: state }
-    } catch (err) { return { status: 'ok', state: null } }
+// A single Google Sheets cell holds at most 50 000 characters, so account_state
+// is stored across as many rows as it needs. Chunk 1 keeps the historical
+// `account_state` key so small accounts stay readable by older clients; chunk
+// N ≥ 2 uses `account_state#N`. src/googleSheets.js implements the identical
+// contract — the two must stay byte-for-byte compatible or a device syncing
+// through this backend hands the browser truncated JSON.
+var ACCOUNT_STATE_CHUNK_SIZE = 45000
+
+// 0 for anything that is not a chunk row, otherwise the 1-based chunk number.
+function accountStateChunkIndex(key) {
+  if (key === 'account_state') return 1
+  var match = /^account_state#(\d+)$/.exec(key)
+  if (!match) return 0
+  var index = Number(match[1])
+  return index >= 2 && index === Math.floor(index) ? index : 0
+}
+
+function accountStateChunks(json) {
+  var value = json === null || json === undefined ? '' : String(json)
+  var chunks = [], index = 0
+  while (index < value.length) {
+    var end = Math.min(index + ACCOUNT_STATE_CHUNK_SIZE, value.length)
+    // Each chunk becomes its own cell, so a boundary landing inside a surrogate
+    // pair (any emoji) would store two lone surrogates and read back as U+FFFD.
+    // Give the high surrogate to the next chunk instead.
+    var last = value.charCodeAt(end - 1)
+    if (end < value.length && last >= 0xD800 && last <= 0xDBFF) end -= 1
+    chunks.push(value.slice(index, end))
+    index = end
   }
-  return { status: 'ok', state: null }
+  if (chunks.length === 0) chunks.push('')
+  return chunks
+}
+
+function accountStateChunkRows(json, timestamp) {
+  return accountStateChunks(json).map(function (chunk, i) {
+    return [i === 0 ? 'account_state' : 'account_state#' + (i + 1), chunk, timestamp]
+  })
+}
+
+// rows is the whole data range, header included. Chunks are ordered by number,
+// never by text: a text sort puts #10 before #9 and silently corrupts the JSON.
+function accountStateJson(rows) {
+  var chunks = []
+  for (var i = 1; i < rows.length; i++) {
+    var index = accountStateChunkIndex(String(rows[i][0]))
+    if (!index) continue
+    chunks.push([index, rows[i][1] === undefined || rows[i][1] === null ? '' : String(rows[i][1])])
+  }
+  chunks.sort(function (left, right) { return left[0] - right[0] })
+  return chunks.map(function (chunk) { return chunk[1] }).join('')
+}
+
+function accountReadState() {
+  var raw = accountStateJson(accountStateSheet().getDataRange().getValues())
+  if (!raw) return { status: 'ok', state: null }
+  try {
+    var state = JSON.parse(raw)
+    if (state && Array.isArray(state.pets)) state.pets = state.pets.filter(function (pet) { return !pet.demo })
+    return { status: 'ok', state: state }
+  } catch (err) { return { status: 'ok', state: null } }
+}
+
+// Rewrites every chunk row in one pass: non-chunk rows (ui_state) keep their
+// order, the fresh chunks follow, and whatever the previous save left below is
+// cleared so a shrink from three chunks to one leaves no orphaned tail behind.
+function accountWriteStateRows(sh, json) {
+  var rows = sh.getDataRange().getValues(), kept = []
+  for (var i = 1; i < rows.length; i++) {
+    var key = String(rows[i][0] || '')
+    if (!key || accountStateChunkIndex(key)) continue
+    kept.push([rows[i][0], rows[i][1] === undefined || rows[i][1] === null ? '' : rows[i][1], rows[i][2] === undefined || rows[i][2] === null ? '' : rows[i][2]])
+  }
+  var values = kept.concat(accountStateChunkRows(json, nowIso()))
+  var previousLastRow = Math.max(rows.length, sh.getLastRow())
+  sh.getRange(2, 1, values.length, 3).setValues(values)
+  var leftover = previousLastRow - (1 + values.length)
+  if (leftover > 0) sh.getRange(2 + values.length, 1, leftover, 3).clearContent()
 }
 // --- Shared-Sheet three-way merge -------------------------------------------
 // A save used to clear every managed row and rewrite it from the calling
@@ -636,10 +704,7 @@ function accountSaveStateUnsafe(state, baseline) {
   var persistedState = mergeSyncStates(baseline, state, accountReadState().state)
   if (Array.isArray(persistedState.pets)) persistedState = Object.assign({}, persistedState, { pets: persistedState.pets.filter(function (pet) { return !pet.demo }) })
   accountWriteNormalizedState(persistedState, accountSpreadsheet)
-  var sh = accountStateSheet(), rows = sh.getDataRange().getValues(), row = -1
-  for (var i = 1; i < rows.length; i++) if (String(rows[i][0]) === 'account_state') { row = i + 1; break }
-  var values = [['account_state', JSON.stringify(persistedState), nowIso()]]
-  if (row < 0) sh.getRange(sh.getLastRow() + 1, 1, 1, 3).setValues(values); else sh.getRange(row, 1, 1, 3).setValues(values)
+  accountWriteStateRows(accountStateSheet(), JSON.stringify(persistedState))
   return { status: 'ok', state: persistedState }
 }
 function accountSaveState(state, baseline) { return withAccountLock(function () { return accountSaveStateUnsafe(state, baseline) }) }
