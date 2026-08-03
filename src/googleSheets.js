@@ -62,6 +62,42 @@ export async function listPetCareSheets(accessToken) {
   }))
 }
 
+// A single Google Sheets cell holds at most 50 000 characters, so the
+// account_state JSON is written across as many rows as it needs. Chunk 1 keeps
+// the historical `account_state` key so older readers still see valid JSON for
+// small accounts; chunk N ≥ 2 is `account_state#N`. Apps Script implements the
+// identical contract.
+export const ACCOUNT_STATE_CHUNK_SIZE = 45000
+export const ACCOUNT_STATE_LAST_ROW = 42
+const PHOTO_CELL_LIMIT = 49000
+
+export function encodeAccountStateRows(json, timestamp) {
+  const value = json === null || json === undefined ? '' : String(json)
+  const chunks = []
+  for (let index = 0; index < value.length; index += ACCOUNT_STATE_CHUNK_SIZE) {
+    chunks.push(value.slice(index, index + ACCOUNT_STATE_CHUNK_SIZE))
+  }
+  if (chunks.length === 0) chunks.push('')
+  return chunks.map((chunk, index) => [index === 0 ? 'account_state' : `account_state#${index + 1}`, chunk, timestamp])
+}
+
+export function decodeAccountStateRows(rows) {
+  const chunks = []
+  for (const row of rows || []) {
+    const key = String(row?.[0] ?? '')
+    if (key === 'account_state') {
+      chunks.push([1, String(row?.[1] ?? '')])
+      continue
+    }
+    const match = /^account_state#(\d+)$/.exec(key)
+    if (!match) continue
+    const index = Number(match[1])
+    if (!Number.isInteger(index) || index < 2) continue
+    chunks.push([index, String(row?.[1] ?? '')])
+  }
+  return chunks.sort((left, right) => left[0] - right[0]).map(chunk => chunk[1]).join('')
+}
+
 export function encodeAppState(state) {
   return {
     key: 'ui_state',
@@ -204,9 +240,10 @@ export async function createOrFindPetCareSheet(accessToken, email, preferredSpre
 export async function loadAppState(accessToken, spreadsheetId) {
   const range = encodeURIComponent('app_state!A2:C')
   const data = await apiFetch(`${SHEETS_API}/spreadsheets/${spreadsheetId}/values/${range}`, { headers: authHeaders(accessToken) })
-  const row = (data.values || []).find((values) => values[0] === 'account_state') || (data.values || []).find((values) => values[0] === 'ui_state')
-  if (!row?.[1]) return null
-  try { return JSON.parse(row[1]) } catch { return null }
+  const values = data.values || []
+  const raw = decodeAccountStateRows(values) || values.find((row) => row[0] === 'ui_state')?.[1]
+  if (!raw) return null
+  try { return JSON.parse(raw) } catch { return null }
 }
 
 export async function saveAppState(accessToken, spreadsheetId, state) {
@@ -392,6 +429,10 @@ export function serializeNormalizedState(state, timestamp) {
     name,
     objects[name].map(object => PETCARE_SHEETS[name].map(header => {
       const value = object[header]
+      // One legacy photo that no longer fits in a cell would make the whole
+      // batch write fail, taking every other record down with it. Drop that
+      // single cell instead and keep the rest of the account syncing.
+      if (header === 'photo' && typeof value === 'string' && value.length > PHOTO_CELL_LIMIT) return ''
       return typeof value === 'boolean' ? (value ? 'TRUE' : 'FALSE') : (value ?? '')
     })),
   ]))
@@ -650,7 +691,11 @@ export async function savePetCareState(accessToken, spreadsheetId, state, baseli
   // it must mirror the reconciled rows rather than this device's raw snapshot;
   // otherwise it re-introduces the overwrite the reconciliation just avoided.
   const reconciledState = deserializeNormalizedState(serialized)
-  data.push({ range: 'app_state!A3:C3', majorDimension: 'ROWS', values: [['account_state', JSON.stringify({ ...reconciledState, activePetId: state.activePetId || '' }), legacy.updated_at]] })
+  const accountRows = encodeAccountStateRows(JSON.stringify({ ...reconciledState, activePetId: state.activePetId || '' }), legacy.updated_at)
+  accountRows.forEach((row, index) => {
+    const rowNumber = index + 3
+    data.push({ range: `app_state!A${rowNumber}:C${rowNumber}`, majorDimension: 'ROWS', values: [row] })
+  })
   await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
     method: 'POST',
     headers: authHeaders(accessToken),
@@ -674,6 +719,11 @@ export async function savePetCareState(accessToken, spreadsheetId, state, baseli
       return `${name}!${column}${startRow}:${column}${endRow}`
     })
   })
+  // A state that shrinks writes fewer chunks than the previous save, so the
+  // leftover rows must go or a reader would append stale trailing JSON. Rows 1
+  // and 2 (headers, ui_state) are never touched.
+  const firstStaleChunkRow = accountRows.length + 3
+  if (firstStaleChunkRow <= ACCOUNT_STATE_LAST_ROW) staleRanges.push(`app_state!A${firstStaleChunkRow}:C${ACCOUNT_STATE_LAST_ROW}`)
   if (staleRanges.length > 0) {
     await apiFetch(`${SHEETS_API}/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`, {
       method: 'POST',

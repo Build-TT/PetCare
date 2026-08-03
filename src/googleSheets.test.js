@@ -1,16 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  ACCOUNT_STATE_CHUNK_SIZE,
   PETCARE_SHEETS,
   buildPetCareSheetTitle,
   encodeAppState,
   createOrFindPetCareSheet,
+  decodeAccountStateRows,
   deserializeNormalizedState,
+  encodeAccountStateRows,
+  loadAppState,
   loadPetCareState,
   savePetCareState,
   serializeNormalizedState,
 } from './googleSheets.js'
 
 afterEach(() => vi.restoreAllMocks())
+
+// account_state no longer lives in a single cell, so tests read it the way a
+// reader must: collect every app_state entry and let the decoder reassemble it.
+const accountStateChunks = body => body.data.filter(item => item.range.startsWith('app_state!'))
+const accountStateBlob = body => JSON.parse(decodeAccountStateRows(accountStateChunks(body).flatMap(item => item.values)))
 
 describe('Google Sheet schema', () => {
   it('uses an account-specific title and includes an app state tab', () => {
@@ -473,7 +482,7 @@ describe('Google Sheet schema', () => {
     const idsFor = sheet => body.data.find(item => item.range.startsWith(`${sheet}!A2:`)).values.flat()
     expect(idsFor('symptom_logs')).toEqual(expect.arrayContaining(['mine', 'theirs']))
     expect(idsFor('activity_logs')).toContain('their-activity')
-    const sharedBlob = JSON.parse(body.data.find(item => item.range === 'app_state!A3:C3').values[0][1])
+    const sharedBlob = accountStateBlob(body)
     expect(sharedBlob.logs.map(item => item.id)).toEqual(expect.arrayContaining(['mine', 'theirs']))
     expect(sharedBlob.activities.map(item => item.id)).toContain('their-activity')
   })
@@ -516,5 +525,133 @@ describe('Google Sheet schema', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(loadPetCareState('token', 'sheet-1')).resolves.toMatchObject({ pets: [], tracks: [] })
+  })
+})
+
+describe('chunked account_state', () => {
+  const timestamp = '2026-08-03T00:00:00.000Z'
+  const emptyValueRanges = () => ({ valueRanges: Array.from({ length: 10 }, () => ({ values: [] })) })
+
+  it('splits a huge JSON blob into ordered chunk rows that reassemble byte-for-byte', () => {
+    const json = JSON.stringify({ note: 'ก'.repeat(120000) })
+    expect(json.length).toBeGreaterThan(100000)
+
+    const rows = encodeAccountStateRows(json, timestamp)
+
+    expect(ACCOUNT_STATE_CHUNK_SIZE).toBe(45000)
+    expect(rows.length).toBeGreaterThanOrEqual(3)
+    expect(rows.map(row => row[0])).toEqual(['account_state', ...rows.slice(1).map((_, index) => `account_state#${index + 2}`)])
+    expect(rows.every(row => row[1].length <= 45000)).toBe(true)
+    expect(rows.every(row => row[2] === timestamp)).toBe(true)
+    expect(decodeAccountStateRows(rows)).toBe(json)
+  })
+
+  it('reassembles chunks in numeric order regardless of row order and ignores other keys', () => {
+    const json = JSON.stringify({ note: 'x'.repeat(500000) })
+    const rows = encodeAccountStateRows(json, timestamp)
+    expect(rows.length).toBeGreaterThan(10)
+
+    const shuffled = [['ui_state', '{"__normalized_schema_version":1}', timestamp], ...[...rows].reverse()]
+
+    expect(decodeAccountStateRows(shuffled)).toBe(json)
+  })
+
+  it('treats a legacy single account_state row as one chunk and unknown sheets as empty', () => {
+    expect(decodeAccountStateRows([['account_state', '{"pets":[]}', timestamp]])).toBe('{"pets":[]}')
+    expect(decodeAccountStateRows([['ui_state', '{"pets":[]}', timestamp]])).toBe('')
+    expect(decodeAccountStateRows([])).toBe('')
+    expect(decodeAccountStateRows(undefined)).toBe('')
+  })
+
+  it('writes one batchUpdate entry per chunk row and clears the rows after the last chunk', async () => {
+    const fetchMock = vi.fn().mockImplementation((url) => ({
+      ok: true,
+      json: async () => url.includes('values:batchGet') ? emptyValueRanges() : { updated: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const logs = Array.from({ length: 20 }, (_, index) => ({
+      id: `l${index}`, pet_id: 'p1', datetime: '2026-08-01T09:00', symptom: 'ซึม', diary: 'ก'.repeat(6000), tracks: [],
+    }))
+
+    await savePetCareState('token', 'sheet-1', {
+      pets: [{ id: 'p1', name: 'Mochi' }], tracks: [], symptoms: [], activities: [], reminders: [], logs, activePetId: 'p1',
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))[1].body)
+    const chunks = accountStateChunks(body).filter(item => item.range !== 'app_state!A2:C2')
+    expect(chunks.length).toBeGreaterThanOrEqual(3)
+    expect(chunks.map(item => item.range)).toEqual(chunks.map((_, index) => `app_state!A${index + 3}:C${index + 3}`))
+    expect(chunks.map(item => item.values[0][0])).toEqual(['account_state', ...chunks.slice(1).map((_, index) => `account_state#${index + 2}`)])
+    expect(chunks.every(item => item.values[0][1].length <= 45000)).toBe(true)
+    expect(body.data.some(item => item.range === 'app_state!A2:C2')).toBe(true)
+    const blob = accountStateBlob(body)
+    expect(blob.activePetId).toBe('p1')
+    expect(blob.logs).toHaveLength(20)
+    expect(blob.pets.map(pet => pet.id)).toEqual(['p1'])
+
+    const clear = fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
+    expect(clear[0]).toContain('/values:batchClear')
+    expect(JSON.parse(clear[1].body).ranges).toContain(`app_state!A${chunks.length + 3}:C42`)
+  })
+
+  it('clears stale chunk rows even when a small state needs a single chunk', async () => {
+    const fetchMock = vi.fn().mockImplementation((url) => ({
+      ok: true,
+      json: async () => url.includes('values:batchGet') ? emptyValueRanges() : { updated: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await savePetCareState('token', 'sheet-1', { pets: [{ id: 'p1', name: 'Mochi' }], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] })
+
+    const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))[1].body)
+    expect(accountStateChunks(body).map(item => item.range)).toEqual(['app_state!A2:C2', 'app_state!A3:C3'])
+    const clearCalls = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
+    expect(clearCalls).toHaveLength(1)
+    expect(JSON.parse(clearCalls[0][1].body).ranges).toContain('app_state!A4:C42')
+  })
+
+  it('loads a chunked account_state sheet, a legacy single-row sheet, and the ui_state fallback', async () => {
+    const state = { pets: [{ id: 'p1', name: 'Mochi', photo: 'p'.repeat(60000) }], logs: [] }
+    const chunked = encodeAccountStateRows(JSON.stringify(state), timestamp)
+    expect(chunked.length).toBeGreaterThan(1)
+    const respondWith = rows => vi.stubGlobal('fetch', vi.fn().mockImplementation(() => ({ ok: true, json: async () => ({ values: rows }) })))
+
+    respondWith([['ui_state', '{"__normalized_schema_version":1}', timestamp], ...[...chunked].reverse()])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toEqual(state)
+
+    respondWith([['ui_state', '{"legacy":true}', timestamp], ['account_state', '{"pets":[{"id":"p1"}]}', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toEqual({ pets: [{ id: 'p1' }] })
+
+    respondWith([['ui_state', '{"legacy":true}', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toEqual({ legacy: true })
+
+    respondWith([['account_state', 'not json', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
+
+    respondWith([])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
+  })
+
+  it('blanks only an oversized photo cell so the rest of the pet row still syncs', () => {
+    const oversized = 'd'.repeat(49001)
+    const state = {
+      pets: [
+        { id: 'p1', name: 'Mochi', color: 'brown', photo: oversized, active: true },
+        { id: 'p2', name: 'Kiwi', color: 'white', photo: 'data:image/jpeg;base64,small', active: true },
+        { id: 'p3', name: 'Edge', photo: 'e'.repeat(49000), active: true },
+      ],
+      tracks: [], symptoms: [], logs: [], activities: [], reminders: [],
+    }
+
+    const rows = serializeNormalizedState(state, timestamp)
+
+    const cell = (index, header) => rows.pets[index][PETCARE_SHEETS.pets.indexOf(header)]
+    expect(cell(0, 'photo')).toBe('')
+    expect(cell(0, 'name')).toBe('Mochi')
+    expect(cell(0, 'color')).toBe('brown')
+    expect(cell(0, 'active')).toBe('TRUE')
+    expect(cell(1, 'photo')).toBe('data:image/jpeg;base64,small')
+    expect(cell(2, 'photo')).toHaveLength(49000)
+    expect(state.pets[0].photo).toBe(oversized)
   })
 })
