@@ -34,6 +34,13 @@ const LOCAL_STATE_KEY = 'petcare.local.v1'
 const REMOTE_OUTBOX_KEY = 'petcare.remote-outbox.v1'
 const GOOGLE_SHEET_META_KEY = 'petcare.google-sheet.v1'
 const GOOGLE_ONBOARDING_KEY = 'petcare.google-drive-onboarding.v1'
+// A failed save used to sit in the outbox until the next edit, which reads as
+// data loss on the other device. Retries back off and then repeat forever at
+// the last delay, so a long outage still converges without hammering the Sheet.
+const SYNC_RETRY_DELAYS = [5000, 15000, 60000]
+// Shown whenever Google auth itself is what failed. Backoff cannot fix a
+// revoked or unrenewable session, so this asks for the one action that can.
+const GOOGLE_RECONNECT_HINT = 'เชื่อมต่อ Google อัตโนมัติไม่สำเร็จ ข้อมูลในเครื่องยังอยู่ครบและรอซิงก์ — กด Reconnect ในหน้าตั้งค่าเพื่อเชื่อม Sheet เดิมต่อ'
 // Above this length a base64 photo starts crowding the Google Sheets cell
 // limit; the one-time migration effect recompresses anything already stored
 // past this size.
@@ -145,8 +152,8 @@ function Summary({ logs, symptoms = defaultSymptoms, onEdit, onDelete, showRecor
       {granularity === 'monthly' && <label>เดือน<input aria-label="เดือนที่ต้องการ" type="month" value={selectedMonth} onChange={event => setSelectedMonth(event.target.value)} /></label>}
       {granularity === 'yearly' && <label>ปี ค.ศ.<input aria-label="ปีที่ต้องการ" type="number" min="2000" max="2100" value={selectedYear} onChange={event => setSelectedYear(event.target.value)} /></label>}
     </div>
-    <section className="insight" aria-label={trendTitle}><b>{trendTitle}</b><p>รวม {visible.length} รายการในช่วงที่เลือก</p><div className="bars trend-bars">{trend.map(item => <div key={item.label} className={item.value ? 'hot' : ''} title={`${item.label}: ${item.value} ครั้ง`} style={{ height: `${Math.max(8, item.value / trendMax * 100)}%` }}><span>{item.label}</span></div>)}</div></section>
-    <section className="insight" aria-label={frequentWindowTitle}><b>{frequentWindowTitle}</b><p>{summary.mostFrequentWindow ? `${String(summary.mostFrequentWindow.startHour).padStart(2, '0')}:00–${String(summary.mostFrequentWindow.endHour).padStart(2, '0')}:00 · ${summary.mostFrequentWindow.count} ครั้ง` : 'ยังไม่มีข้อมูลอาการ'}</p><div className="bars">{values.map((value, i) => <div key={labels[i]} className={i === 3 ? 'hot' : ''} style={{ height: `${Math.max(8, value / max * 100)}%` }}><span>{labels[i]}</span></div>)}</div></section>
+    <section className="insight" aria-label={trendTitle}><b>{trendTitle}</b><p>รวม {visible.length} รายการในช่วงที่เลือก</p><div className="bars trend-bars">{trend.map(item => <div key={item.label} className={item.value ? 'hot' : ''} title={`${item.label}: ${item.value} ครั้ง`} style={{ height: `${Math.max(8, item.value / trendMax * 100)}%` }}>{item.value > 0 && <i>{item.value}</i>}<span>{item.label}</span></div>)}</div></section>
+    <section className="insight" aria-label={frequentWindowTitle}><b>{frequentWindowTitle}</b><p>{summary.mostFrequentWindow ? `${String(summary.mostFrequentWindow.startHour).padStart(2, '0')}:00–${String(summary.mostFrequentWindow.endHour).padStart(2, '0')}:00 · ${summary.mostFrequentWindow.count} ครั้ง` : 'ยังไม่มีข้อมูลอาการ'}</p><div className="bars">{values.map((value, i) => <div key={labels[i]} className={i === 3 ? 'hot' : ''} style={{ height: `${Math.max(8, value / max * 100)}%` }}>{value > 0 && <i>{value}</i>}<span>{labels[i]}</span></div>)}</div></section>
     {showRecords && <><div className="section-title"><h2>รายการบันทึก</h2><small>ตามตัวกรองด้านบน</small></div>
       <div className="data-table"><div className="table-head"><span>วัน / เวลา</span><span>รายการ + Track ณ เวลานั้น</span><span /></div>{visible.map(log => <div className="table-row" key={log.id}><time>{new Date(log.datetime).toLocaleDateString('th-TH')}<br />{log.datetime.slice(11, 16)}</time><div><b>{log.symptom}{log.diary ? ` · ${log.diary}` : ''}</b>{(log.tracks || []).map(track => <em key={track.id}>{track.name} · {track.dose} · {track.schedule}</em>)}</div><div className="row-actions"><button onClick={() => onEdit(log)}>แก้ไข</button><button className="danger" onClick={() => onDelete(log.id)}>ลบ</button></div></div>)}</div></>}
   </>
@@ -195,7 +202,7 @@ function DailyRecords({ logs, activities, onEditLog, onDeleteLog }) {
     <div className="section-title"><h2>รายการบันทึก</h2><small>{days.length} วัน</small></div>
     <div className="daily-filter" aria-label="กรองช่วงวันที่">
       <label>ตั้งแต่<input aria-label="วันที่เริ่มต้น" type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} /></label>
-      <span aria-hidden="true">ถึง</span>
+      <span aria-hidden="true">-</span>
       <label>ถึง<input aria-label="วันที่สิ้นสุด" type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} /></label>
       {(dateFrom || dateTo) && <button className="text-button" onClick={clearDates}>ล้างตัวกรอง</button>}
     </div>
@@ -321,8 +328,21 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState('idle')
   const [syncError, setSyncError] = useState('')
+  // Bumping this nonce re-runs the debounced save effect with the current
+  // state, which is how a retry resends without waiting for a user edit.
+  const [syncRetryNonce, setSyncRetryNonce] = useState(0)
   const remoteRevisionRef = useRef(0)
   const remoteSaveQueueRef = useRef(Promise.resolve())
+  const syncRetryTimerRef = useRef(0)
+  const syncRetryAttemptsRef = useRef(0)
+  // Timers and event listeners outlive the render that scheduled them, so the
+  // retry decision reads live values from refs, never a stale closure.
+  const syncStatusRef = useRef('idle')
+  const googleConnectionRef = useRef(null)
+  const remoteReadyRef = useRef(false)
+  const handleGoogleConnectedRef = useRef(null)
+  const connectInFlightRef = useRef(false)
+  const mountedRef = useRef(true)
   const photoMigrationRanRef = useRef(false)
   const formContextRef = useRef(null)
   // Latest persisted collections, so the background refresh can merge without
@@ -411,7 +431,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
 
   useEffect(() => {
     if (page !== 'track' || trackTab !== 'track') return
-    setSelectedTracks(activeTracks.map(track => track.id))
+    setSelectedTracks([])
   }, [page, trackTab, activePetId])
 
   const clearTrackDraft = () => {
@@ -473,9 +493,98 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     migrateOversizedPhotos().catch(() => undefined)
   }, [])
 
+  syncStatusRef.current = syncStatus
+  googleConnectionRef.current = googleConnection
+  remoteReadyRef.current = remoteReady
+  const clearSyncRetry = () => {
+    if (!syncRetryTimerRef.current) return
+    window.clearTimeout(syncRetryTimerRef.current)
+    syncRetryTimerRef.current = 0
+  }
+  // A Google-mode access token is short-lived and never persisted, so every
+  // attempt mints its own through the same helper the save path uses. Replaying
+  // the token a failed attempt used — or the remembered connection's missing
+  // one — would retry a guaranteed failure until the end of time.
+  const startConnectRetry = async (connection) => {
+    connectInFlightRef.current = true
+    let refreshed
+    try {
+      refreshed = { ...connection, accessToken: await resolveGoogleToken(connection) }
+    } catch {
+      // Auth itself failed. Backoff cannot fix a session Google will not renew,
+      // so stop retrying and leave the message that names the way out.
+      connectInFlightRef.current = false
+      clearSyncRetry()
+      setSyncStatus('error')
+      setSyncError(GOOGLE_RECONNECT_HINT)
+      return
+    }
+    try {
+      await handleGoogleConnectedRef.current(refreshed)
+    } catch {
+      // handleGoogleConnected's own catch already scheduled the next attempt.
+    } finally {
+      connectInFlightRef.current = false
+    }
+  }
+  // What a retry means depends on how far the sync got. A failed save only
+  // needs the save effect re-run, but a failed *first load* leaves remoteReady
+  // false, and that effect returns early — so the connect itself is what has
+  // to be re-driven, otherwise the outbox can never drain on its own.
+  const runSyncRetry = () => {
+    if (!mountedRef.current || syncStatusRef.current !== 'error') return
+    // Only a Sheet this device already remembers is retried on its own, on
+    // every path: a first-time onboarding the user walked away from is not.
+    const connection = googleConnectionRef.current
+    if (!connection) return
+    if (!remoteReadyRef.current) {
+      // Overlapping connects would interleave their hydration writes.
+      if (!connectInFlightRef.current && handleGoogleConnectedRef.current) startConnectRetry(connection)
+      return
+    }
+    setSyncRetryNonce(nonce => nonce + 1)
+  }
+  // One timer at a time: every schedule replaces the pending one, so repeated
+  // failures can never stack parallel retry loops on top of each other.
+  const scheduleSyncRetry = () => {
+    clearSyncRetry()
+    // A promise that settles after unmount would otherwise install a timer
+    // nothing is left to clear.
+    if (!mountedRef.current) return
+    const delay = SYNC_RETRY_DELAYS[syncRetryAttemptsRef.current] ?? SYNC_RETRY_DELAYS[SYNC_RETRY_DELAYS.length - 1]
+    syncRetryAttemptsRef.current += 1
+    syncRetryTimerRef.current = window.setTimeout(() => {
+      syncRetryTimerRef.current = 0
+      runSyncRetry()
+    }, delay)
+  }
+
+  // Regaining the network or returning to the tab is the cheapest signal that a
+  // retry is worth trying now instead of waiting out the remaining backoff.
+  useEffect(() => {
+    mountedRef.current = true
+    const retryNow = () => {
+      if (syncStatusRef.current !== 'error') return
+      clearSyncRetry()
+      runSyncRetry()
+    }
+    const retryWhenVisible = () => { if (document.visibilityState === 'visible') retryNow() }
+    window.addEventListener('online', retryNow)
+    document.addEventListener('visibilitychange', retryWhenVisible)
+    return () => {
+      mountedRef.current = false
+      window.removeEventListener('online', retryNow)
+      document.removeEventListener('visibilitychange', retryWhenVisible)
+      clearSyncRetry()
+    }
+    // Mount-only: both handlers read live values from refs, so they never go stale.
+  }, [])
+
   useEffect(() => {
     if (recoveryMode || isReader) return undefined
     if (!googleConnection || !remoteReady) return undefined
+    // This run supersedes any retry that was waiting to resend an older attempt.
+    clearSyncRetry()
     const requestRevision = ++remoteRevisionRef.current
     const persistedPets = pets.filter(pet => !pet.demo)
     const pendingState = { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedPets.some(pet => pet.id === activePetId) ? activePetId : '' }
@@ -501,6 +610,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           // another device added are absent from it, so a later save can never
           // mistake them for something this device deleted.
           saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(pendingState))
+          syncRetryAttemptsRef.current = 0
+          clearSyncRetry()
           setSyncStatus('saved')
           setSyncError('')
         })
@@ -509,14 +620,18 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })
           setSyncStatus('error')
           setSyncError(error.message || 'Google Sheet save failed')
+          scheduleSyncRetry()
         })
     }, 500)
     return () => window.clearTimeout(timeout)
-  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader, recoveryMode])
+    // syncRetryNonce is a dependency on purpose: bumping it re-runs this effect
+    // with whatever state the current render holds, which is how a retry resends.
+  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader, recoveryMode, syncRetryNonce])
 
   const handleGoogleConnected = async (connection) => {
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
     setRemoteReady(false)
+    remoteReadyRef.current = false
     try {
       const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId, connection)
       // Connecting — to an existing Sheet or a brand-new one — must only ever
@@ -542,17 +657,32 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(remote || {}))
       setGoogleConnection(connection)
       setRemoteReady(true)
+      remoteReadyRef.current = true
+      // A live connection is a successful sync attempt, exactly like a saved
+      // state: the backoff starts over and any pending retry is dropped.
+      syncRetryAttemptsRef.current = 0
+      clearSyncRetry()
       window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
       setShowGoogleOnboarding(false)
+      // Hydration can land on exactly the state already held, leaving the save
+      // effect nothing to react to; the outbox would then stay stuck from the
+      // previous session. Bumping the nonce flushes it on connect.
+      if (pendingState) setSyncRetryNonce(nonce => nonce + 1)
       for (const recipient of hydrated.lineRecipients ?? []) {
         await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipient.recipient_id })
       }
     } catch (error) {
       setSyncStatus('error')
       setSyncError(error.message || 'โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ')
+      // Without this the outbox is stranded: remoteReady stays false, so the
+      // save effect never runs and nothing else would ever try again. Only a
+      // Sheet this device already remembers is retried on its own — a
+      // first-time onboarding failure stays the user's own attempt to repeat.
+      if (googleConnectionRef.current) scheduleSyncRetry()
       throw error
     }
   }
+  handleGoogleConnectedRef.current = handleGoogleConnected
   const provisionLine = async (connection, recipientId) => {
     await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipientId })
   }
@@ -900,7 +1030,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
         setRemoteReady(false)
         setShowGoogleOnboarding(false)
         setSyncStatus('error')
-        setSyncError('เชื่อมต่อ Google อัตโนมัติไม่สำเร็จ ข้อมูลในเครื่องยังอยู่ครบและรอซิงก์ — กด Reconnect ในหน้าตั้งค่าเพื่อเชื่อม Sheet เดิมต่อ')
+        setSyncError(GOOGLE_RECONNECT_HINT)
       }
     }
     restoreGoogleConnection()
