@@ -8,6 +8,7 @@ let gisLoader
 let tokenClient
 let pendingTokenRequest
 let tokenCache = { accessToken: '', expiresAt: 0 }
+let inFlightSilentRenewal
 
 export function isGoogleConfigured() {
   return Boolean(CLIENT_ID)
@@ -83,9 +84,22 @@ export async function requestGoogleAccessToken({ prompt = '', loginHint = '' } =
 // renewal when the cached token is missing or within `minTtlMs` of expiring.
 // Errors from the silent renewal propagate to the caller, who decides
 // whether to fall back to an interactive reconnect flow.
+//
+// Concurrent callers (e.g. a debounced save effect and a visibilitychange
+// handler firing close together) coalesce onto a single in-flight silent
+// renewal instead of racing on requestGoogleAccessToken's single-slot
+// pendingTokenRequest, which would otherwise reject the first caller with
+// "Google authorization is already in progress".
 export async function ensureGoogleAccessToken({ email = '', minTtlMs = 5 * 60_000 } = {}) {
   if (tokenCache.expiresAt - Date.now() > minTtlMs) return tokenCache.accessToken
-  return requestGoogleAccessToken({ prompt: 'none', loginHint: email })
+  if (inFlightSilentRenewal) return inFlightSilentRenewal
+  const renewal = requestGoogleAccessToken({ prompt: 'none', loginHint: email })
+  inFlightSilentRenewal = renewal
+  try {
+    return await renewal
+  } finally {
+    if (inFlightSilentRenewal === renewal) inFlightSilentRenewal = undefined
+  }
 }
 
 // Returns the cached access token if it still has at least 60s of validity

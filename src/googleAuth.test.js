@@ -105,6 +105,20 @@ describe('Google access token lifecycle', () => {
     expect(googleAuth.getCachedGoogleAccessToken()).toBe('token-new')
   })
 
+  it('coalesces concurrent ensureGoogleAccessToken calls into a single silent renewal', async () => {
+    const first = googleAuth.ensureGoogleAccessToken({ email: 'user@example.com' })
+    const second = googleAuth.ensureGoogleAccessToken({ email: 'user@example.com' })
+
+    await simulateSuccess('token-shared', 3600)
+
+    await expect(first).resolves.toBe('token-shared')
+    await expect(second).resolves.toBe('token-shared')
+
+    expect(initTokenClient).toHaveBeenCalledTimes(1)
+    const tokenClientInstance = initTokenClient.mock.results[0].value
+    expect(tokenClientInstance.requestAccessToken).toHaveBeenCalledTimes(1)
+  })
+
   it('propagates errors from a silent renewal attempt', async () => {
     const promise = googleAuth.ensureGoogleAccessToken({ email: 'user@example.com' })
     await simulateError('login_required')
