@@ -74,8 +74,16 @@ const PHOTO_CELL_LIMIT = 49000
 export function encodeAccountStateRows(json, timestamp) {
   const value = json === null || json === undefined ? '' : String(json)
   const chunks = []
-  for (let index = 0; index < value.length; index += ACCOUNT_STATE_CHUNK_SIZE) {
-    chunks.push(value.slice(index, index + ACCOUNT_STATE_CHUNK_SIZE))
+  let index = 0
+  while (index < value.length) {
+    let end = Math.min(index + ACCOUNT_STATE_CHUNK_SIZE, value.length)
+    // Each chunk becomes its own cell, so a boundary that lands inside a
+    // surrogate pair (any emoji) would store two lone surrogates and come back
+    // as U+FFFD. Give the high surrogate back to the next chunk instead.
+    const last = value.charCodeAt(end - 1)
+    if (end < value.length && last >= 0xD800 && last <= 0xDBFF) end -= 1
+    chunks.push(value.slice(index, end))
+    index = end
   }
   if (chunks.length === 0) chunks.push('')
   return chunks.map((chunk, index) => [index === 0 ? 'account_state' : `account_state#${index + 1}`, chunk, timestamp])
@@ -241,7 +249,10 @@ export async function loadAppState(accessToken, spreadsheetId) {
   const range = encodeURIComponent('app_state!A2:C')
   const data = await apiFetch(`${SHEETS_API}/spreadsheets/${spreadsheetId}/values/${range}`, { headers: authHeaders(accessToken) })
   const values = data.values || []
-  const raw = decodeAccountStateRows(values) || values.find((row) => row[0] === 'ui_state')?.[1]
+  // Only a sheet with no account_state row at all falls back to ui_state; a
+  // present-but-empty blob stays "no state" rather than an empty merge input.
+  const hasAccountRow = values.some((row) => /^account_state(#\d+)?$/.test(String(row?.[0] ?? '')))
+  const raw = decodeAccountStateRows(values) || (hasAccountRow ? '' : values.find((row) => row[0] === 'ui_state')?.[1])
   if (!raw) return null
   try { return JSON.parse(raw) } catch { return null }
 }

@@ -556,6 +556,28 @@ describe('chunked account_state', () => {
     expect(decodeAccountStateRows(shuffled)).toBe(json)
   })
 
+  it('never splits an emoji across two cells', () => {
+    // Google Sheets stores each cell separately, so a chunk that ends on a lone
+    // high surrogate is corrupted on the way back (U+FFFD) or rejected outright.
+    const json = JSON.stringify({ note: `${'a'.repeat(44990)}${'🐶'.repeat(40000)}` })
+    const naiveBoundary = json.charCodeAt(ACCOUNT_STATE_CHUNK_SIZE - 1)
+    expect(naiveBoundary).toBeGreaterThanOrEqual(0xD800)
+    expect(naiveBoundary).toBeLessThanOrEqual(0xDBFF)
+
+    const rows = encodeAccountStateRows(json, timestamp)
+
+    expect(rows.length).toBeGreaterThan(2)
+    for (const [, value] of rows) {
+      expect(value.length).toBeLessThanOrEqual(ACCOUNT_STATE_CHUNK_SIZE)
+      const last = value.charCodeAt(value.length - 1)
+      const first = value.charCodeAt(0)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+      expect(first >= 0xDC00 && first <= 0xDFFF).toBe(false)
+    }
+    expect(decodeAccountStateRows(rows)).toBe(json)
+    expect(JSON.parse(decodeAccountStateRows(rows)).note).toContain('🐶')
+  })
+
   it('treats a legacy single account_state row as one chunk and unknown sheets as empty', () => {
     expect(decodeAccountStateRows([['account_state', '{"pets":[]}', timestamp]])).toBe('{"pets":[]}')
     expect(decodeAccountStateRows([['ui_state', '{"pets":[]}', timestamp]])).toBe('')
@@ -626,6 +648,11 @@ describe('chunked account_state', () => {
     await expect(loadAppState('token', 'sheet-1')).resolves.toEqual({ legacy: true })
 
     respondWith([['account_state', 'not json', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
+
+    // A present-but-empty account_state must not fall back: an empty blob would
+    // become an empty merge input and delete records the user never touched.
+    respondWith([['ui_state', '{"legacy":true}', timestamp], ['account_state', '', timestamp]])
     await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
 
     respondWith([])
