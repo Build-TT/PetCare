@@ -600,8 +600,15 @@ function accountReadState() {
 }
 
 // Rewrites every chunk row in one pass: non-chunk rows (ui_state) keep their
-// order, the fresh chunks follow, and whatever the previous save left below is
-// cleared so a shrink from three chunks to one leaves no orphaned tail behind.
+// order, the fresh chunks follow, and blank rows pad the range out to whatever
+// the previous save reached, so a shrink from four chunks to one leaves no
+// orphaned tail behind.
+//
+// It has to be a single setValues. accountReadState is served outside the
+// account lock (doPost calls it directly), so an invited device polling for
+// changes can read between two writes: writing the fresh chunks and clearing
+// the old tail separately exposes a window where the sheet holds new JSON
+// followed by a stale chunk, which fails JSON.parse and reports state: null.
 function accountWriteStateRows(sh, json) {
   var rows = sh.getDataRange().getValues(), kept = []
   for (var i = 1; i < rows.length; i++) {
@@ -611,9 +618,8 @@ function accountWriteStateRows(sh, json) {
   }
   var values = kept.concat(accountStateChunkRows(json, nowIso()))
   var previousLastRow = Math.max(rows.length, sh.getLastRow())
+  while (values.length < previousLastRow - 1) values.push(['', '', ''])
   sh.getRange(2, 1, values.length, 3).setValues(values)
-  var leftover = previousLastRow - (1 + values.length)
-  if (leftover > 0) sh.getRange(2 + values.length, 1, leftover, 3).clearContent()
 }
 // --- Shared-Sheet three-way merge -------------------------------------------
 // A save used to clear every managed row and rewrite it from the calling

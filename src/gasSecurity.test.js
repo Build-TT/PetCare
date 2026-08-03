@@ -549,14 +549,21 @@ function makeAppStateSheet(rows = []) {
     while (grid[row - 1].length < col) grid[row - 1].push('')
     grid[row - 1][col - 1] = value
   }
+  // Real Sheets counts to the last row that still holds content, and the data
+  // range stops there too, so blanked-out tail rows disappear from both.
+  const lastRow = () => {
+    let last = 0
+    grid.forEach((row, index) => { if (row.some(value => String(value) !== '')) last = index + 1 })
+    return last
+  }
   return {
     grid,
     clears,
     writes,
     accountRows: () => grid.slice(1).filter(row => String(row[0]).indexOf('account_state') === 0),
-    getLastRow: () => grid.length,
+    getLastRow: lastRow,
     getLastColumn: () => grid.reduce((max, row) => Math.max(max, row.length), 0),
-    getDataRange: () => ({ getValues: () => grid.map(row => row.slice()) }),
+    getDataRange: () => ({ getValues: () => grid.slice(0, lastRow()).map(row => row.slice()) }),
     getRange: (row, col, numRows, numCols) => ({
       getValues: () => grid.slice(row - 1, row - 1 + numRows).map(line => line.slice(col - 1, col - 1 + numCols)),
       setValues: values => {
@@ -619,19 +626,31 @@ describe('chunked account_state rows', () => {
     expect(sandbox.accountReadState().state).toEqual({ pets: [], activePetId: 'p1' })
   })
 
-  it('leaves no stale chunk rows behind when the state shrinks', () => {
+  it('shrinks the chunk rows in one atomic write, leaving no stale tail', () => {
     const sheet = makeAppStateSheet([['ui_state', '{"tab":"logs"}', '2026-08-01T09:00']])
     const sandbox = makeAccountSandbox(sheet)
     sandbox.accountSaveStateUnsafe({ pets: [{ id: 'p1', name: 'Mochi', note: 'z'.repeat(140000) }] }, null)
-    expect(sheet.accountRows().length).toBeGreaterThan(2)
+    expect(sheet.accountRows()).toHaveLength(4)
+    const rowsBeforeShrink = sheet.getLastRow()
 
+    sheet.writes.length = 0
+    sheet.clears.length = 0
     const small = { pets: [{ id: 'p2', name: 'Tiny' }] }
     const saved = sandbox.accountSaveStateUnsafe(small, { pets: { p1: '' } })
     expect(saved.state.pets.map(pet => pet.id)).toEqual(['p2'])
 
+    // accountReadState is routed outside the account lock, so a polling invited
+    // device can read between two writes. Clearing the old tail in a second
+    // call would hand it fresh JSON followed by a stale chunk — JSON.parse
+    // throws and the device sees state: null. The rewrite must be one call
+    // that blanks the tail rows itself.
+    expect(sheet.writes).toEqual([{ row: 2, col: 1, numRows: rowsBeforeShrink - 1, numCols: 3 }])
+    expect(sheet.clears).toEqual([])
+
     expect(sheet.accountRows().map(row => row[0])).toEqual(['account_state'])
     expect(sheet.grid.slice(1).filter(row => String(row[0]))).toHaveLength(2)
     expect(sheet.grid[1]).toEqual(['ui_state', '{"tab":"logs"}', '2026-08-01T09:00'])
+    expect(sheet.grid.slice(3, rowsBeforeShrink)).toEqual([['', '', ''], ['', '', ''], ['', '', '']])
     expect(sandbox.accountReadState().state.pets).toEqual(small.pets)
   })
 
