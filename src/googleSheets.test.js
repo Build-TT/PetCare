@@ -1,16 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  ACCOUNT_STATE_CHUNK_SIZE,
   PETCARE_SHEETS,
   buildPetCareSheetTitle,
   encodeAppState,
   createOrFindPetCareSheet,
+  decodeAccountStateRows,
   deserializeNormalizedState,
+  encodeAccountStateRows,
+  loadAppState,
   loadPetCareState,
   savePetCareState,
   serializeNormalizedState,
 } from './googleSheets.js'
 
 afterEach(() => vi.restoreAllMocks())
+
+// account_state no longer lives in a single cell, so tests read it the way a
+// reader must: collect every app_state entry and let the decoder reassemble it.
+const accountStateChunks = body => body.data.filter(item => item.range.startsWith('app_state!'))
+const accountStateBlob = body => JSON.parse(decodeAccountStateRows(accountStateChunks(body).flatMap(item => item.values)))
 
 describe('Google Sheet schema', () => {
   it('uses an account-specific title and includes an app state tab', () => {
@@ -473,7 +482,7 @@ describe('Google Sheet schema', () => {
     const idsFor = sheet => body.data.find(item => item.range.startsWith(`${sheet}!A2:`)).values.flat()
     expect(idsFor('symptom_logs')).toEqual(expect.arrayContaining(['mine', 'theirs']))
     expect(idsFor('activity_logs')).toContain('their-activity')
-    const sharedBlob = JSON.parse(body.data.find(item => item.range === 'app_state!A3:C3').values[0][1])
+    const sharedBlob = accountStateBlob(body)
     expect(sharedBlob.logs.map(item => item.id)).toEqual(expect.arrayContaining(['mine', 'theirs']))
     expect(sharedBlob.activities.map(item => item.id)).toContain('their-activity')
   })
@@ -516,5 +525,202 @@ describe('Google Sheet schema', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(loadPetCareState('token', 'sheet-1')).resolves.toMatchObject({ pets: [], tracks: [] })
+  })
+})
+
+describe('chunked account_state', () => {
+  const timestamp = '2026-08-03T00:00:00.000Z'
+  const emptyValueRanges = () => ({ valueRanges: Array.from({ length: 10 }, () => ({ values: [] })) })
+
+  it('splits a huge JSON blob into ordered chunk rows that reassemble byte-for-byte', () => {
+    const json = JSON.stringify({ note: 'ก'.repeat(120000) })
+    expect(json.length).toBeGreaterThan(100000)
+
+    const rows = encodeAccountStateRows(json, timestamp)
+
+    expect(ACCOUNT_STATE_CHUNK_SIZE).toBe(45000)
+    expect(rows.length).toBeGreaterThanOrEqual(3)
+    expect(rows.map(row => row[0])).toEqual(['account_state', ...rows.slice(1).map((_, index) => `account_state#${index + 2}`)])
+    expect(rows.every(row => row[1].length <= 45000)).toBe(true)
+    expect(rows.every(row => row[2] === timestamp)).toBe(true)
+    expect(decodeAccountStateRows(rows)).toBe(json)
+  })
+
+  it('reassembles chunks in numeric order regardless of row order and ignores other keys', () => {
+    const json = JSON.stringify({ note: 'x'.repeat(500000) })
+    const rows = encodeAccountStateRows(json, timestamp)
+    expect(rows.length).toBeGreaterThan(10)
+
+    const shuffled = [['ui_state', '{"__normalized_schema_version":1}', timestamp], ...[...rows].reverse()]
+
+    expect(decodeAccountStateRows(shuffled)).toBe(json)
+  })
+
+  it('never splits an emoji across two cells', () => {
+    // Google Sheets stores each cell separately, so a chunk that ends on a lone
+    // high surrogate is corrupted on the way back (U+FFFD) or rejected outright.
+    const json = JSON.stringify({ note: `${'a'.repeat(44990)}${'🐶'.repeat(40000)}` })
+    const naiveBoundary = json.charCodeAt(ACCOUNT_STATE_CHUNK_SIZE - 1)
+    expect(naiveBoundary).toBeGreaterThanOrEqual(0xD800)
+    expect(naiveBoundary).toBeLessThanOrEqual(0xDBFF)
+
+    const rows = encodeAccountStateRows(json, timestamp)
+
+    expect(rows.length).toBeGreaterThan(2)
+    for (const [, value] of rows) {
+      expect(value.length).toBeLessThanOrEqual(ACCOUNT_STATE_CHUNK_SIZE)
+      const last = value.charCodeAt(value.length - 1)
+      const first = value.charCodeAt(0)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+      expect(first >= 0xDC00 && first <= 0xDFFF).toBe(false)
+    }
+    expect(decodeAccountStateRows(rows)).toBe(json)
+    expect(JSON.parse(decodeAccountStateRows(rows)).note).toContain('🐶')
+  })
+
+  it('treats a legacy single account_state row as one chunk and unknown sheets as empty', () => {
+    expect(decodeAccountStateRows([['account_state', '{"pets":[]}', timestamp]])).toBe('{"pets":[]}')
+    expect(decodeAccountStateRows([['ui_state', '{"pets":[]}', timestamp]])).toBe('')
+    expect(decodeAccountStateRows([])).toBe('')
+    expect(decodeAccountStateRows(undefined)).toBe('')
+  })
+
+  it('never starts a chunk with a character Google Sheets reads as a formula', () => {
+    // Range.setValues treats a cell beginning with '=' or '+' as a formula and
+    // strips a leading apostrophe, so a boundary that lands there corrupts the
+    // chunk. The boundary has to back off, exactly like the surrogate rule.
+    const json = JSON.stringify({ note: `${'a'.repeat(44991)}${'='.repeat(5)}${'b'.repeat(60000)}` })
+    expect(json.charAt(ACCOUNT_STATE_CHUNK_SIZE)).toBe('=')
+
+    const rows = encodeAccountStateRows(json, timestamp)
+
+    expect(rows.length).toBeGreaterThan(2)
+    rows.slice(1).forEach(([, value]) => {
+      expect(['=', '+', "'"]).not.toContain(value.charAt(0))
+    })
+    rows.forEach(([, value]) => {
+      expect(value.length).toBeLessThanOrEqual(ACCOUNT_STATE_CHUNK_SIZE)
+      expect(value.length).toBeGreaterThanOrEqual(1)
+      const last = value.charCodeAt(value.length - 1)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+    })
+    expect(decodeAccountStateRows(rows)).toBe(json)
+  })
+
+  it('accepts a risky boundary rather than emptying a chunk on pathological content', () => {
+    const value = '='.repeat(ACCOUNT_STATE_CHUNK_SIZE + 2)
+
+    const rows = encodeAccountStateRows(value, timestamp)
+
+    expect(rows.every(row => row[1].length >= 1)).toBe(true)
+    expect(decodeAccountStateRows(rows)).toBe(value)
+  })
+
+  it('writes one batchUpdate entry per chunk row and clears the rows after the last chunk', async () => {
+    const fetchMock = vi.fn().mockImplementation((url) => ({
+      ok: true,
+      json: async () => url.includes('values:batchGet') ? emptyValueRanges() : { updated: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const logs = Array.from({ length: 20 }, (_, index) => ({
+      id: `l${index}`, pet_id: 'p1', datetime: '2026-08-01T09:00', symptom: 'ซึม', diary: 'ก'.repeat(6000), tracks: [],
+    }))
+
+    await savePetCareState('token', 'sheet-1', {
+      pets: [{ id: 'p1', name: 'Mochi' }], tracks: [], symptoms: [], activities: [], reminders: [], logs, activePetId: 'p1',
+    })
+
+    const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))[1].body)
+    const entries = accountStateChunks(body).filter(item => item.range !== 'app_state!A2:C2')
+    const chunks = entries.filter(item => item.values[0][0] !== '')
+    expect(chunks.length).toBeGreaterThanOrEqual(3)
+    expect(chunks.map(item => item.range)).toEqual(chunks.map((_, index) => `app_state!A${index + 3}:C${index + 3}`))
+    expect(chunks.map(item => item.values[0][0])).toEqual(['account_state', ...chunks.slice(1).map((_, index) => `account_state#${index + 2}`)])
+    expect(chunks.every(item => item.values[0][1].length <= 45000)).toBe(true)
+    expect(body.data.some(item => item.range === 'app_state!A2:C2')).toBe(true)
+    const blob = accountStateBlob(body)
+    expect(blob.activePetId).toBe('p1')
+    expect(blob.logs).toHaveLength(20)
+    expect(blob.pets.map(pet => pet.id)).toEqual(['p1'])
+
+    // The stale tail is blanked inside the same batchUpdate, never by a second
+    // call: a child device polling Apps Script between the two would otherwise
+    // read fresh chunks followed by a stale one and fail JSON.parse.
+    const blanks = entries.filter(item => item.values[0][0] === '')
+    expect(blanks.map(item => item.range)).toEqual([`app_state!A${chunks.length + 3}:C42`])
+    expect(blanks[0].values.every(row => row.join('') === '')).toBe(true)
+    expect(blanks[0].values).toHaveLength(42 - (chunks.length + 3) + 1)
+    const clearedRanges = fetchMock.mock.calls
+      .filter(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
+      .flatMap(([, options]) => JSON.parse(options.body).ranges)
+    expect(clearedRanges.some(range => range.startsWith('app_state!'))).toBe(false)
+  })
+
+  it('blanks the stale chunk tail in the same write when a small state needs a single chunk', async () => {
+    const fetchMock = vi.fn().mockImplementation((url) => ({
+      ok: true,
+      json: async () => url.includes('values:batchGet') ? emptyValueRanges() : { updated: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await savePetCareState('token', 'sheet-1', { pets: [{ id: 'p1', name: 'Mochi' }], tracks: [], symptoms: [], logs: [], activities: [], reminders: [] })
+
+    const body = JSON.parse(fetchMock.mock.calls.find(([, options]) => options?.method === 'POST' && String(options.body).includes('valueInputOption'))[1].body)
+    expect(accountStateChunks(body).map(item => item.range)).toEqual(['app_state!A2:C2', 'app_state!A3:C3', 'app_state!A4:C42'])
+    const blanks = body.data.find(item => item.range === 'app_state!A4:C42')
+    expect(blanks.values).toHaveLength(39)
+    expect(blanks.values.every(row => row.join('') === '')).toBe(true)
+    const clearCalls = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST' && String(options.body).includes('"ranges"'))
+    expect(clearCalls).toHaveLength(0)
+  })
+
+  it('loads a chunked account_state sheet, a legacy single-row sheet, and the ui_state fallback', async () => {
+    const state = { pets: [{ id: 'p1', name: 'Mochi', photo: 'p'.repeat(60000) }], logs: [] }
+    const chunked = encodeAccountStateRows(JSON.stringify(state), timestamp)
+    expect(chunked.length).toBeGreaterThan(1)
+    const respondWith = rows => vi.stubGlobal('fetch', vi.fn().mockImplementation(() => ({ ok: true, json: async () => ({ values: rows }) })))
+
+    respondWith([['ui_state', '{"__normalized_schema_version":1}', timestamp], ...[...chunked].reverse()])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toEqual(state)
+
+    respondWith([['ui_state', '{"legacy":true}', timestamp], ['account_state', '{"pets":[{"id":"p1"}]}', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toEqual({ pets: [{ id: 'p1' }] })
+
+    respondWith([['ui_state', '{"legacy":true}', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toEqual({ legacy: true })
+
+    respondWith([['account_state', 'not json', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
+
+    // A present-but-empty account_state must not fall back: an empty blob would
+    // become an empty merge input and delete records the user never touched.
+    respondWith([['ui_state', '{"legacy":true}', timestamp], ['account_state', '', timestamp]])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
+
+    respondWith([])
+    await expect(loadAppState('token', 'sheet-1')).resolves.toBeNull()
+  })
+
+  it('blanks only an oversized photo cell so the rest of the pet row still syncs', () => {
+    const oversized = 'd'.repeat(49001)
+    const state = {
+      pets: [
+        { id: 'p1', name: 'Mochi', color: 'brown', photo: oversized, active: true },
+        { id: 'p2', name: 'Kiwi', color: 'white', photo: 'data:image/jpeg;base64,small', active: true },
+        { id: 'p3', name: 'Edge', photo: 'e'.repeat(49000), active: true },
+      ],
+      tracks: [], symptoms: [], logs: [], activities: [], reminders: [],
+    }
+
+    const rows = serializeNormalizedState(state, timestamp)
+
+    const cell = (index, header) => rows.pets[index][PETCARE_SHEETS.pets.indexOf(header)]
+    expect(cell(0, 'photo')).toBe('')
+    expect(cell(0, 'name')).toBe('Mochi')
+    expect(cell(0, 'color')).toBe('brown')
+    expect(cell(0, 'active')).toBe('TRUE')
+    expect(cell(1, 'photo')).toBe('data:image/jpeg;base64,small')
+    expect(cell(2, 'photo')).toHaveLength(49000)
+    expect(state.pets[0].photo).toBe(oversized)
   })
 })

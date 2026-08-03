@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { loadRemoteStateMock, saveRemoteStateMock, requestGoogleAccessTokenMock, getGoogleUserProfileMock, createSheetMock } = vi.hoisted(() => ({
+const { loadRemoteStateMock, saveRemoteStateMock, requestGoogleAccessTokenMock, ensureGoogleAccessTokenMock, clearGoogleTokenCacheMock, getGoogleUserProfileMock, createSheetMock } = vi.hoisted(() => ({
   loadRemoteStateMock: vi.fn(),
   saveRemoteStateMock: vi.fn(),
   requestGoogleAccessTokenMock: vi.fn(),
+  ensureGoogleAccessTokenMock: vi.fn(),
+  clearGoogleTokenCacheMock: vi.fn(),
   getGoogleUserProfileMock: vi.fn(),
   createSheetMock: vi.fn(),
 }))
@@ -17,6 +19,8 @@ vi.mock('./googleAuth.js', () => ({
   isGoogleConfigured: () => true,
   loadGoogleIdentityServices: () => Promise.resolve(),
   requestGoogleAccessToken: requestGoogleAccessTokenMock,
+  ensureGoogleAccessToken: ensureGoogleAccessTokenMock,
+  clearGoogleTokenCache: clearGoogleTokenCacheMock,
   getGoogleUserProfile: getGoogleUserProfileMock,
 }))
 vi.mock('./googleSheets.js', () => ({ createOrFindPetCareSheet: createSheetMock, listPetCareSheets: vi.fn().mockResolvedValue([]) }))
@@ -41,6 +45,7 @@ describe('App remote sync integration', () => {
     loadRemoteStateMock.mockReset().mockResolvedValue(staleRemote)
     saveRemoteStateMock.mockReset().mockResolvedValue({ status: 'ok' })
     requestGoogleAccessTokenMock.mockReset().mockResolvedValue('google-token')
+    ensureGoogleAccessTokenMock.mockReset().mockResolvedValue('google-token')
     getGoogleUserProfileMock.mockReset().mockResolvedValue({ email: 'owner@example.com' })
     createSheetMock.mockReset().mockResolvedValue({ spreadsheetId: 'sheet-1', spreadsheetUrl: 'https://sheet.test', name: 'PetCare', created: false })
   })

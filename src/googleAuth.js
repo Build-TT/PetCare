@@ -7,6 +7,8 @@ const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
 let gisLoader
 let tokenClient
 let pendingTokenRequest
+let tokenCache = { accessToken: '', expiresAt: 0 }
+let inFlightSilentRenewal
 
 export function isGoogleConfigured() {
   return Boolean(CLIENT_ID)
@@ -36,7 +38,7 @@ export function loadGoogleIdentityServices() {
   return gisLoader
 }
 
-export async function requestGoogleAccessToken({ prompt = '' } = {}) {
+export async function requestGoogleAccessToken({ prompt = '', loginHint = '' } = {}) {
   if (!isGoogleConfigured()) throw new Error('ยังไม่ได้ตั้งค่า VITE_GOOGLE_CLIENT_ID')
   const google = await loadGoogleIdentityServices()
   return new Promise((resolve, reject) => {
@@ -49,8 +51,15 @@ export async function requestGoogleAccessToken({ prompt = '' } = {}) {
         const pending = pendingTokenRequest
         pendingTokenRequest = undefined
         if (!pending) return
-        if (response?.error) pending.reject(new Error(response.error === 'popup_failed_to_open' ? 'เปิดหน้าต่าง Google ไม่ได้ กรุณาอนุญาต Popup สำหรับเว็บไซต์นี้แล้วลองใหม่' : response.error_description || response.error))
-        else pending.resolve(response.access_token)
+        if (response?.error) {
+          pending.reject(new Error(response.error === 'popup_failed_to_open' ? 'เปิดหน้าต่าง Google ไม่ได้ กรุณาอนุญาต Popup สำหรับเว็บไซต์นี้แล้วลองใหม่' : response.error_description || response.error))
+        } else {
+          tokenCache = {
+            accessToken: response.access_token,
+            expiresAt: Date.now() + (Number(response.expires_in) || 3600) * 1000,
+          }
+          pending.resolve(response.access_token)
+        }
       },
       error_callback: (error) => {
         const pending = pendingTokenRequest
@@ -63,12 +72,45 @@ export async function requestGoogleAccessToken({ prompt = '' } = {}) {
       // consent dialog after a normal browser refresh.  GIS will still call
       // the callback with an error when the session has expired; callers can
       // then ask the user to reconnect explicitly.
-      tokenClient.requestAccessToken({ prompt })
+      tokenClient.requestAccessToken({ prompt, ...(loginHint ? { login_hint: loginHint } : {}) })
     } catch (error) {
       pendingTokenRequest = undefined
       reject(error)
     }
   })
+}
+
+// Returns a still-valid cached token, or performs a silent (prompt: 'none')
+// renewal when the cached token is missing or within `minTtlMs` of expiring.
+// Errors from the silent renewal propagate to the caller, who decides
+// whether to fall back to an interactive reconnect flow.
+//
+// Concurrent callers (e.g. a debounced save effect and a visibilitychange
+// handler firing close together) coalesce onto a single in-flight silent
+// renewal instead of racing on requestGoogleAccessToken's single-slot
+// pendingTokenRequest, which would otherwise reject the first caller with
+// "Google authorization is already in progress".
+export async function ensureGoogleAccessToken({ email = '', minTtlMs = 5 * 60_000 } = {}) {
+  if (tokenCache.expiresAt - Date.now() > minTtlMs) return tokenCache.accessToken
+  if (inFlightSilentRenewal) return inFlightSilentRenewal
+  const renewal = requestGoogleAccessToken({ prompt: 'none', loginHint: email })
+  inFlightSilentRenewal = renewal
+  try {
+    return await renewal
+  } finally {
+    if (inFlightSilentRenewal === renewal) inFlightSilentRenewal = undefined
+  }
+}
+
+// Returns the cached access token if it still has at least 60s of validity
+// left, otherwise an empty string.
+export function getCachedGoogleAccessToken() {
+  if (tokenCache.expiresAt - Date.now() > 60_000) return tokenCache.accessToken
+  return ''
+}
+
+export function clearGoogleTokenCache() {
+  tokenCache = { accessToken: '', expiresAt: 0 }
 }
 
 export async function getGoogleUserProfile(accessToken) {

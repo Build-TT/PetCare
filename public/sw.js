@@ -4,7 +4,7 @@
 // enforces it. It is what makes this file's bytes change on every release: a
 // browser only installs a new service worker when sw.js itself differs, so the
 // previous fixed cache name left installed apps serving an old build forever.
-const VERSION = '2026.08.02.2'
+const VERSION = '2026.08.03.1'
 const CACHE = `petcare-shell-${VERSION}`
 
 self.addEventListener('install', event => {
