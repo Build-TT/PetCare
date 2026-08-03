@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { loadRemoteStateMock, saveRemoteStateMock, requestGoogleAccessTokenMock, ensureGoogleAccessTokenMock, clearGoogleTokenCacheMock, getGoogleUserProfileMock, createSheetMock } = vi.hoisted(() => ({
@@ -33,6 +33,26 @@ const remote = { tracks: [], logs: [], activities: [], reminders: [], symptoms: 
 // handleGoogleConnected on its own, without any onboarding click.
 const childSession = { session_token: 'child-token', user: { username: 'child', email: 'child@example.com', spreadsheet_id: 'sheet-1', role: 'user' } }
 const pendingLog = { id: 'log_pending', pet_id: 'p1', datetime: '2026-08-03T09:00', symptom: 'ซึม', diary: 'รอซิงก์', tracks: [] }
+const RECONNECT_HINT = 'กด Reconnect ในหน้าตั้งค่า'
+
+// A Google-OAuth-mode device: only non-secret Sheet metadata is persisted, so
+// the remembered connection never carries an access token.
+function rememberGoogleSheet() {
+  window.localStorage.setItem('petcare.google-sheet.v1', JSON.stringify({ spreadsheetId: 'sheet-1', spreadsheetUrl: 'https://sheet.test', name: 'PetCare', email: 'owner@example.com' }))
+  window.localStorage.setItem('petcare.google-drive-onboarding.v1', 'connected')
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise(res => { resolve = res })
+  return { promise, resolve }
+}
+
+async function googleSheetPanelAlerts() {
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' })) })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ })) })
+  return within(screen.getByLabelText('Google Sheet connection')).getAllByRole('alert').map(node => node.textContent).join(' | ')
+}
 // The save effect debounces by 500ms; a little headroom keeps assertions off the edge.
 const DEBOUNCE = 600
 
@@ -222,6 +242,67 @@ describe('App auto-retries failed Google Sheet saves', () => {
     view.unmount()
     await advance(180000)
     expect(loadRemoteStateMock).toHaveBeenCalledTimes(3)
+  })
+
+  // Google-OAuth mode: the remembered connection holds no access token, and the
+  // silent sign-in that would mint one failed too. Retrying the raw connection
+  // would call the Sheet with an empty token forever and bury the one message
+  // that tells the user what to do.
+  it('stops instead of looping when no Google token can be resolved, keeping the reconnect hint', async () => {
+    rememberGoogleSheet()
+    requestGoogleAccessTokenMock.mockRejectedValue(new Error('popup_closed_by_user'))
+    ensureGoogleAccessTokenMock.mockRejectedValue(new Error('silent renewal failed'))
+    render(<App />)
+    await advance(0)
+    expect(loadRemoteStateMock).not.toHaveBeenCalled()
+
+    await act(async () => { window.dispatchEvent(new Event('online')) })
+    await advance(0)
+    expect(loadRemoteStateMock).not.toHaveBeenCalled()
+
+    await advance(180000)
+    expect(loadRemoteStateMock).not.toHaveBeenCalled()
+    expect(await googleSheetPanelAlerts()).toContain(RECONNECT_HINT)
+  })
+
+  it('resolves a fresh Google token for each connect retry instead of replaying the failed one', async () => {
+    rememberGoogleSheet()
+    requestGoogleAccessTokenMock.mockResolvedValue('boot-token')
+    ensureGoogleAccessTokenMock.mockResolvedValue('fresh-token')
+    loadRemoteStateMock.mockRejectedValueOnce(new Error('เครือข่ายล่ม')).mockResolvedValue(remote)
+    render(<App />)
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(1)
+    expect(loadRemoteStateMock.mock.calls[0][0]).toBe('boot-token')
+
+    await advance(5000)
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+    expect(loadRemoteStateMock.mock.calls[1][0]).toBe('fresh-token')
+  })
+
+  it('never runs two connect retries at once', async () => {
+    const gate = deferred()
+    loadRemoteStateMock
+      .mockRejectedValueOnce(new Error('ไม่พบปลายทาง Apps Script (404)'))
+      .mockImplementationOnce(() => gate.promise)
+    render(<App accountSession={childSession} />)
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(1)
+
+    await act(async () => { window.dispatchEvent(new Event('online')) })
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+
+    // The first retry is still waiting on the network; a second event must not
+    // start an overlapping load whose hydration could interleave.
+    await act(async () => { window.dispatchEvent(new Event('online')) })
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+
+    await act(async () => { gate.resolve(remote) })
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
   })
 
   it('stops the retry timer when the app unmounts', async () => {

@@ -38,6 +38,9 @@ const GOOGLE_ONBOARDING_KEY = 'petcare.google-drive-onboarding.v1'
 // data loss on the other device. Retries back off and then repeat forever at
 // the last delay, so a long outage still converges without hammering the Sheet.
 const SYNC_RETRY_DELAYS = [5000, 15000, 60000]
+// Shown whenever Google auth itself is what failed. Backoff cannot fix a
+// revoked or unrenewable session, so this asks for the one action that can.
+const GOOGLE_RECONNECT_HINT = 'เชื่อมต่อ Google อัตโนมัติไม่สำเร็จ ข้อมูลในเครื่องยังอยู่ครบและรอซิงก์ — กด Reconnect ในหน้าตั้งค่าเพื่อเชื่อม Sheet เดิมต่อ'
 // Above this length a base64 photo starts crowding the Google Sheets cell
 // limit; the one-time migration effect recompresses anything already stored
 // past this size.
@@ -338,9 +341,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const googleConnectionRef = useRef(null)
   const remoteReadyRef = useRef(false)
   const handleGoogleConnectedRef = useRef(null)
-  // The connection a failed connect was attempted with. It carries the fresh
-  // access token that `googleConnection` only receives once a load succeeds.
-  const lastConnectionAttemptRef = useRef(null)
+  const connectInFlightRef = useRef(false)
   const mountedRef = useRef(true)
   const photoMigrationRanRef = useRef(false)
   const formContextRef = useRef(null)
@@ -500,17 +501,45 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     window.clearTimeout(syncRetryTimerRef.current)
     syncRetryTimerRef.current = 0
   }
+  // A Google-mode access token is short-lived and never persisted, so every
+  // attempt mints its own through the same helper the save path uses. Replaying
+  // the token a failed attempt used — or the remembered connection's missing
+  // one — would retry a guaranteed failure until the end of time.
+  const startConnectRetry = async (connection) => {
+    connectInFlightRef.current = true
+    let refreshed
+    try {
+      refreshed = { ...connection, accessToken: await resolveGoogleToken(connection) }
+    } catch {
+      // Auth itself failed. Backoff cannot fix a session Google will not renew,
+      // so stop retrying and leave the message that names the way out.
+      connectInFlightRef.current = false
+      clearSyncRetry()
+      setSyncStatus('error')
+      setSyncError(GOOGLE_RECONNECT_HINT)
+      return
+    }
+    try {
+      await handleGoogleConnectedRef.current(refreshed)
+    } catch {
+      // handleGoogleConnected's own catch already scheduled the next attempt.
+    } finally {
+      connectInFlightRef.current = false
+    }
+  }
   // What a retry means depends on how far the sync got. A failed save only
   // needs the save effect re-run, but a failed *first load* leaves remoteReady
   // false, and that effect returns early — so the connect itself is what has
   // to be re-driven, otherwise the outbox can never drain on its own.
   const runSyncRetry = () => {
     if (!mountedRef.current || syncStatusRef.current !== 'error') return
-    const connection = lastConnectionAttemptRef.current || googleConnectionRef.current
+    // Only a Sheet this device already remembers is retried on its own, on
+    // every path: a first-time onboarding the user walked away from is not.
+    const connection = googleConnectionRef.current
     if (!connection) return
     if (!remoteReadyRef.current) {
-      // Its own catch schedules the next attempt; this only swallows the rethrow.
-      if (handleGoogleConnectedRef.current) handleGoogleConnectedRef.current(connection).catch(() => undefined)
+      // Overlapping connects would interleave their hydration writes.
+      if (!connectInFlightRef.current && handleGoogleConnectedRef.current) startConnectRetry(connection)
       return
     }
     setSyncRetryNonce(nonce => nonce + 1)
@@ -603,7 +632,6 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
     setRemoteReady(false)
     remoteReadyRef.current = false
-    lastConnectionAttemptRef.current = connection
     try {
       const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId, connection)
       // Connecting — to an existing Sheet or a brand-new one — must only ever
@@ -632,7 +660,6 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       remoteReadyRef.current = true
       // A live connection is a successful sync attempt, exactly like a saved
       // state: the backoff starts over and any pending retry is dropped.
-      lastConnectionAttemptRef.current = null
       syncRetryAttemptsRef.current = 0
       clearSyncRetry()
       window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
@@ -1003,7 +1030,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
         setRemoteReady(false)
         setShowGoogleOnboarding(false)
         setSyncStatus('error')
-        setSyncError('เชื่อมต่อ Google อัตโนมัติไม่สำเร็จ ข้อมูลในเครื่องยังอยู่ครบและรอซิงก์ — กด Reconnect ในหน้าตั้งค่าเพื่อเชื่อม Sheet เดิมต่อ')
+        setSyncError(GOOGLE_RECONNECT_HINT)
       }
     }
     restoreGoogleConnection()
