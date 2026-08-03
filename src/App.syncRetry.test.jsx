@@ -29,6 +29,10 @@ import App from './App.jsx'
 
 const OUTBOX_KEY = 'petcare.remote-outbox.v1'
 const remote = { tracks: [], logs: [], activities: [], reminders: [], symptoms: [], treatmentHistory: [], lineRecipients: [], pets: [{ id: 'p1', name: 'Remote pet' }], activePetId: 'p1' }
+// A child device that already knows its shared Sheet: the boot restore runs
+// handleGoogleConnected on its own, without any onboarding click.
+const childSession = { session_token: 'child-token', user: { username: 'child', email: 'child@example.com', spreadsheet_id: 'sheet-1', role: 'user' } }
+const pendingLog = { id: 'log_pending', pet_id: 'p1', datetime: '2026-08-03T09:00', symptom: 'ซึม', diary: 'รอซิงก์', tracks: [] }
 // The save effect debounces by 500ms; a little headroom keeps assertions off the edge.
 const DEBOUNCE = 600
 
@@ -163,6 +167,61 @@ describe('App auto-retries failed Google Sheet saves', () => {
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
     await advance(DEBOUNCE)
     expect(saveRemoteStateMock).toHaveBeenCalledTimes(2)
+  })
+
+  // The reported child-device failure: VITE_GAS_URL pointed at a dead Apps
+  // Script deployment, so the very first load failed. remoteReady never turned
+  // true, the save effect never ran, and the outbox sat there for good.
+  it('re-drives the connect when the first remote load failed, so a boot outage still recovers', async () => {
+    window.localStorage.setItem(OUTBOX_KEY, JSON.stringify({ revision: 3, state: { ...remote, logs: [pendingLog] } }))
+    loadRemoteStateMock.mockRejectedValueOnce(new Error('ไม่พบปลายทาง Apps Script (404)')).mockResolvedValue(remote)
+    render(<App accountSession={childSession} />)
+    await advance(0)
+
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(1)
+    expect(saveRemoteStateMock).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(OUTBOX_KEY)).not.toBeNull()
+
+    await advance(5000)
+    await advance(DEBOUNCE)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+    expect(saveRemoteStateMock).toHaveBeenCalledTimes(1)
+    expect(saveRemoteStateMock.mock.calls[0][2].logs.some(log => log.id === 'log_pending')).toBe(true)
+    expect(window.localStorage.getItem(OUTBOX_KEY)).toBeNull()
+  })
+
+  it('re-drives the connect immediately when the browser comes back online after a failed boot load', async () => {
+    window.localStorage.setItem(OUTBOX_KEY, JSON.stringify({ revision: 3, state: { ...remote, logs: [pendingLog] } }))
+    loadRemoteStateMock.mockRejectedValueOnce(new Error('ไม่พบปลายทาง Apps Script (404)')).mockResolvedValue(remote)
+    render(<App accountSession={childSession} />)
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(1)
+
+    await act(async () => { window.dispatchEvent(new Event('online')) })
+    await advance(DEBOUNCE)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+    expect(window.localStorage.getItem(OUTBOX_KEY)).toBeNull()
+  })
+
+  it('keeps backing off the connect while the backend stays dead, then stops on unmount', async () => {
+    loadRemoteStateMock.mockRejectedValue(new Error('ไม่พบปลายทาง Apps Script (404)'))
+    const view = render(<App accountSession={childSession} />)
+    await advance(0)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(1)
+
+    await advance(4000)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(1)
+    await advance(1500)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+
+    await advance(14000)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(2)
+    await advance(1500)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(3)
+
+    view.unmount()
+    await advance(180000)
+    expect(loadRemoteStateMock).toHaveBeenCalledTimes(3)
   })
 
   it('stops the retry timer when the app unmounts', async () => {

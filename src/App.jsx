@@ -333,8 +333,15 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const syncRetryTimerRef = useRef(0)
   const syncRetryAttemptsRef = useRef(0)
   // Timers and event listeners outlive the render that scheduled them, so the
-  // retry decision reads the live status from a ref, never a stale closure.
+  // retry decision reads live values from refs, never a stale closure.
   const syncStatusRef = useRef('idle')
+  const googleConnectionRef = useRef(null)
+  const remoteReadyRef = useRef(false)
+  const handleGoogleConnectedRef = useRef(null)
+  // The connection a failed connect was attempted with. It carries the fresh
+  // access token that `googleConnection` only receives once a load succeeds.
+  const lastConnectionAttemptRef = useRef(null)
+  const mountedRef = useRef(true)
   const photoMigrationRanRef = useRef(false)
   const formContextRef = useRef(null)
   // Latest persisted collections, so the background refresh can merge without
@@ -486,36 +493,57 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   }, [])
 
   syncStatusRef.current = syncStatus
+  googleConnectionRef.current = googleConnection
+  remoteReadyRef.current = remoteReady
   const clearSyncRetry = () => {
     if (!syncRetryTimerRef.current) return
     window.clearTimeout(syncRetryTimerRef.current)
     syncRetryTimerRef.current = 0
   }
+  // What a retry means depends on how far the sync got. A failed save only
+  // needs the save effect re-run, but a failed *first load* leaves remoteReady
+  // false, and that effect returns early — so the connect itself is what has
+  // to be re-driven, otherwise the outbox can never drain on its own.
+  const runSyncRetry = () => {
+    if (!mountedRef.current || syncStatusRef.current !== 'error') return
+    const connection = lastConnectionAttemptRef.current || googleConnectionRef.current
+    if (!connection) return
+    if (!remoteReadyRef.current) {
+      // Its own catch schedules the next attempt; this only swallows the rethrow.
+      if (handleGoogleConnectedRef.current) handleGoogleConnectedRef.current(connection).catch(() => undefined)
+      return
+    }
+    setSyncRetryNonce(nonce => nonce + 1)
+  }
   // One timer at a time: every schedule replaces the pending one, so repeated
   // failures can never stack parallel retry loops on top of each other.
   const scheduleSyncRetry = () => {
     clearSyncRetry()
+    // A promise that settles after unmount would otherwise install a timer
+    // nothing is left to clear.
+    if (!mountedRef.current) return
     const delay = SYNC_RETRY_DELAYS[syncRetryAttemptsRef.current] ?? SYNC_RETRY_DELAYS[SYNC_RETRY_DELAYS.length - 1]
     syncRetryAttemptsRef.current += 1
     syncRetryTimerRef.current = window.setTimeout(() => {
       syncRetryTimerRef.current = 0
-      if (syncStatusRef.current !== 'error') return
-      setSyncRetryNonce(nonce => nonce + 1)
+      runSyncRetry()
     }, delay)
   }
 
   // Regaining the network or returning to the tab is the cheapest signal that a
   // retry is worth trying now instead of waiting out the remaining backoff.
   useEffect(() => {
+    mountedRef.current = true
     const retryNow = () => {
       if (syncStatusRef.current !== 'error') return
       clearSyncRetry()
-      setSyncRetryNonce(nonce => nonce + 1)
+      runSyncRetry()
     }
     const retryWhenVisible = () => { if (document.visibilityState === 'visible') retryNow() }
     window.addEventListener('online', retryNow)
     document.addEventListener('visibilitychange', retryWhenVisible)
     return () => {
+      mountedRef.current = false
       window.removeEventListener('online', retryNow)
       document.removeEventListener('visibilitychange', retryWhenVisible)
       clearSyncRetry()
@@ -574,6 +602,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const handleGoogleConnected = async (connection) => {
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
     setRemoteReady(false)
+    remoteReadyRef.current = false
+    lastConnectionAttemptRef.current = connection
     try {
       const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId, connection)
       // Connecting — to an existing Sheet or a brand-new one — must only ever
@@ -599,6 +629,12 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(remote || {}))
       setGoogleConnection(connection)
       setRemoteReady(true)
+      remoteReadyRef.current = true
+      // A live connection is a successful sync attempt, exactly like a saved
+      // state: the backoff starts over and any pending retry is dropped.
+      lastConnectionAttemptRef.current = null
+      syncRetryAttemptsRef.current = 0
+      clearSyncRetry()
       window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
       setShowGoogleOnboarding(false)
       // Hydration can land on exactly the state already held, leaving the save
@@ -611,9 +647,15 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     } catch (error) {
       setSyncStatus('error')
       setSyncError(error.message || 'โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ')
+      // Without this the outbox is stranded: remoteReady stays false, so the
+      // save effect never runs and nothing else would ever try again. Only a
+      // Sheet this device already remembers is retried on its own — a
+      // first-time onboarding failure stays the user's own attempt to repeat.
+      if (googleConnectionRef.current) scheduleSyncRetry()
       throw error
     }
   }
+  handleGoogleConnectedRef.current = handleGoogleConnected
   const provisionLine = async (connection, recipientId) => {
     await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipientId })
   }
