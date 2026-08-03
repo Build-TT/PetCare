@@ -9,6 +9,10 @@ async function call(action, payload = {}) {
   const data = await response.json().catch(() => null)
   if (!response.ok || data?.status === 'error') {
     if (action.startsWith('account') && data?.message === 'Missing LINE access token') throw new Error('Account backend ยังไม่อัปเดต กรุณา Deploy Google Apps Script เวอร์ชันล่าสุด')
+    // A live Apps Script deployment answers every request with 200 JSON, so a
+    // 404 means the /exec URL itself no longer exists — usually a redeploy that
+    // minted a new URL while VITE_GAS_URL still points at the old one.
+    if (response.status === 404) throw new Error('ไม่พบปลายทาง Apps Script (404) — URL ของ backend อาจเปลี่ยนหลัง redeploy กรุณาตรวจค่า VITE_GAS_URL ใน Vercel ให้ตรงกับ Web app URL ปัจจุบัน')
     throw new Error(data?.message || `PetCare account error (${response.status})`)
   }
   return data

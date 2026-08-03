@@ -34,6 +34,10 @@ const LOCAL_STATE_KEY = 'petcare.local.v1'
 const REMOTE_OUTBOX_KEY = 'petcare.remote-outbox.v1'
 const GOOGLE_SHEET_META_KEY = 'petcare.google-sheet.v1'
 const GOOGLE_ONBOARDING_KEY = 'petcare.google-drive-onboarding.v1'
+// A failed save used to sit in the outbox until the next edit, which reads as
+// data loss on the other device. Retries back off and then repeat forever at
+// the last delay, so a long outage still converges without hammering the Sheet.
+const SYNC_RETRY_DELAYS = [5000, 15000, 60000]
 // Above this length a base64 photo starts crowding the Google Sheets cell
 // limit; the one-time migration effect recompresses anything already stored
 // past this size.
@@ -321,8 +325,16 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncStatus, setSyncStatus] = useState('idle')
   const [syncError, setSyncError] = useState('')
+  // Bumping this nonce re-runs the debounced save effect with the current
+  // state, which is how a retry resends without waiting for a user edit.
+  const [syncRetryNonce, setSyncRetryNonce] = useState(0)
   const remoteRevisionRef = useRef(0)
   const remoteSaveQueueRef = useRef(Promise.resolve())
+  const syncRetryTimerRef = useRef(0)
+  const syncRetryAttemptsRef = useRef(0)
+  // Timers and event listeners outlive the render that scheduled them, so the
+  // retry decision reads the live status from a ref, never a stale closure.
+  const syncStatusRef = useRef('idle')
   const photoMigrationRanRef = useRef(false)
   const formContextRef = useRef(null)
   // Latest persisted collections, so the background refresh can merge without
@@ -473,9 +485,49 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     migrateOversizedPhotos().catch(() => undefined)
   }, [])
 
+  syncStatusRef.current = syncStatus
+  const clearSyncRetry = () => {
+    if (!syncRetryTimerRef.current) return
+    window.clearTimeout(syncRetryTimerRef.current)
+    syncRetryTimerRef.current = 0
+  }
+  // One timer at a time: every schedule replaces the pending one, so repeated
+  // failures can never stack parallel retry loops on top of each other.
+  const scheduleSyncRetry = () => {
+    clearSyncRetry()
+    const delay = SYNC_RETRY_DELAYS[syncRetryAttemptsRef.current] ?? SYNC_RETRY_DELAYS[SYNC_RETRY_DELAYS.length - 1]
+    syncRetryAttemptsRef.current += 1
+    syncRetryTimerRef.current = window.setTimeout(() => {
+      syncRetryTimerRef.current = 0
+      if (syncStatusRef.current !== 'error') return
+      setSyncRetryNonce(nonce => nonce + 1)
+    }, delay)
+  }
+
+  // Regaining the network or returning to the tab is the cheapest signal that a
+  // retry is worth trying now instead of waiting out the remaining backoff.
+  useEffect(() => {
+    const retryNow = () => {
+      if (syncStatusRef.current !== 'error') return
+      clearSyncRetry()
+      setSyncRetryNonce(nonce => nonce + 1)
+    }
+    const retryWhenVisible = () => { if (document.visibilityState === 'visible') retryNow() }
+    window.addEventListener('online', retryNow)
+    document.addEventListener('visibilitychange', retryWhenVisible)
+    return () => {
+      window.removeEventListener('online', retryNow)
+      document.removeEventListener('visibilitychange', retryWhenVisible)
+      clearSyncRetry()
+    }
+    // Mount-only: both handlers read live values from refs, so they never go stale.
+  }, [])
+
   useEffect(() => {
     if (recoveryMode || isReader) return undefined
     if (!googleConnection || !remoteReady) return undefined
+    // This run supersedes any retry that was waiting to resend an older attempt.
+    clearSyncRetry()
     const requestRevision = ++remoteRevisionRef.current
     const persistedPets = pets.filter(pet => !pet.demo)
     const pendingState = { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedPets.some(pet => pet.id === activePetId) ? activePetId : '' }
@@ -501,6 +553,8 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           // another device added are absent from it, so a later save can never
           // mistake them for something this device deleted.
           saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(pendingState))
+          syncRetryAttemptsRef.current = 0
+          clearSyncRetry()
           setSyncStatus('saved')
           setSyncError('')
         })
@@ -509,10 +563,13 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })
           setSyncStatus('error')
           setSyncError(error.message || 'Google Sheet save failed')
+          scheduleSyncRetry()
         })
     }, 500)
     return () => window.clearTimeout(timeout)
-  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader, recoveryMode])
+    // syncRetryNonce is a dependency on purpose: bumping it re-runs this effect
+    // with whatever state the current render holds, which is how a retry resends.
+  }, [tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, googleConnection, remoteReady, isReader, recoveryMode, syncRetryNonce])
 
   const handleGoogleConnected = async (connection) => {
     if (googleConnection?.spreadsheetId && googleConnection.spreadsheetId === connection?.spreadsheetId && remoteReady) return
@@ -544,6 +601,10 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       setRemoteReady(true)
       window.localStorage.setItem(GOOGLE_ONBOARDING_KEY, 'connected')
       setShowGoogleOnboarding(false)
+      // Hydration can land on exactly the state already held, leaving the save
+      // effect nothing to react to; the outbox would then stay stuck from the
+      // previous session. Bumping the nonce flushes it on connect.
+      if (pendingState) setSyncRetryNonce(nonce => nonce + 1)
       for (const recipient of hydrated.lineRecipients ?? []) {
         await provisionGoogleLineLink({ accessToken: connection.accessToken, spreadsheetId: connection.spreadsheetId, lineUserId: recipient.recipient_id })
       }
