@@ -26,6 +26,7 @@ vi.mock('./googleAuth.js', () => ({
 vi.mock('./googleSheets.js', () => ({ createOrFindPetCareSheet: createSheetMock, listPetCareSheets: vi.fn().mockResolvedValue([]) }))
 
 import App from './App.jsx'
+import { getSyncLog } from './syncDebugLog.js'
 
 function deferred() {
   let resolve
@@ -162,5 +163,100 @@ describe('App remote sync integration', () => {
     expect(saveRemoteStateMock.mock.calls.at(-1)[2].activities).toEqual([
       expect.objectContaining({ activity_type: 'เดิน', datetime: '2026-07-17T18:30', duration_minutes: '30', note: 'เดินรอบสวน' }),
     ])
+  })
+
+  it('records connect and save lifecycle events to the sync debug log on a successful connect and save', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => {
+      const events = getSyncLog().map(entry => entry.event)
+      expect(events).toContain('connect_start')
+      expect(events).toContain('connect_remote_loaded')
+      expect(events).toContain('connect_merged')
+    })
+
+    await waitFor(() => expect(saveRemoteStateMock).toHaveBeenCalled(), { timeout: 1500 })
+    await waitFor(() => {
+      const log = getSyncLog()
+      const saveStart = log.find(entry => entry.event === 'save_start')
+      const saveSuccess = log.find(entry => entry.event === 'save_success')
+      expect(saveStart).toBeTruthy()
+      expect(saveSuccess).toBeTruthy()
+      expect(saveSuccess.revision).toBe(saveStart.revision)
+    })
+  })
+
+  it('records a save_error entry with the rejection message when a save fails', async () => {
+    saveRemoteStateMock.mockReset().mockRejectedValue(new Error('Google Sheet save failed: network down'))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => expect(saveRemoteStateMock).toHaveBeenCalled(), { timeout: 1500 })
+    await waitFor(() => {
+      const saveError = getSyncLog().find(entry => entry.event === 'save_error')
+      expect(saveError).toBeTruthy()
+      expect(saveError.message).toContain('Google Sheet save failed: network down')
+    })
+  })
+
+  it('redacts a full spreadsheet id embedded in a rejection message before it reaches the sync debug log', async () => {
+    // Mirrors the shape apiFetch() in googleSheets.js throws on a Sheets API
+    // error: the full spreadsheet id sits in the URL pathname. Logging this
+    // verbatim would defeat the deliberate 6-char truncation used elsewhere
+    // (connect_start's sheetSuffix).
+    const fullSpreadsheetId = '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'
+    saveRemoteStateMock.mockReset().mockRejectedValue(
+      new Error(`Google API error (429) [429 /v4/spreadsheets/${fullSpreadsheetId}/values:batchUpdate]`),
+    )
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => expect(saveRemoteStateMock).toHaveBeenCalled(), { timeout: 1500 })
+    await waitFor(() => {
+      const saveError = getSyncLog().find(entry => entry.event === 'save_error')
+      expect(saveError).toBeTruthy()
+      expect(saveError.message).not.toContain(fullSpreadsheetId)
+      expect(saveError.message).toContain('/v4/spreadsheets/…/values:batchUpdate')
+    })
+    // The full id must not appear anywhere in the persisted log, not just the
+    // one field asserted above.
+    expect(JSON.stringify(getSyncLog())).not.toContain(fullSpreadsheetId)
+  })
+
+  it('redacts a full spreadsheet id embedded in a connect-failure message before it reaches the sync debug log', async () => {
+    const fullSpreadsheetId = '1CyjNWt1YSB6oGNeLwCeCcKhVVrqumcs85PhwF3vqnt'
+    loadRemoteStateMock.mockReset().mockRejectedValue(
+      new Error(`Google API error (403) [403 /v4/spreadsheets/${fullSpreadsheetId}]`),
+    )
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => {
+      const connectFailed = getSyncLog().find(entry => entry.event === 'connect_failed')
+      expect(connectFailed).toBeTruthy()
+      expect(connectFailed.message).not.toContain(fullSpreadsheetId)
+    })
+    expect(JSON.stringify(getSyncLog())).not.toContain(fullSpreadsheetId)
   })
 })

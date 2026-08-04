@@ -11,6 +11,7 @@ import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
 import { exportLocalRecoveryBundle } from './sync/recovery.js'
 import { isRecoveryMode } from './sync/recoveryMode.js'
 import { compressPhotoToDataUrl } from './photo.js'
+import { appendSyncLog, redactSyncErrorMessage, summarizeState } from './syncDebugLog.js'
 import './index.css'
 import './appFeatures.css'
 
@@ -418,6 +419,10 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   }, [])
 
   useEffect(() => {
+    appendSyncLog('boot', { mode: rememberedGoogleSheet?.mode || 'none', hasOutbox: Boolean(loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null)), hasBaseline: Boolean(loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)), local: summarizeState(initial) })
+  }, [])
+
+  useEffect(() => {
     if (availablePets.length > 0 && !availablePets.some(item => item.id === activePetId)) setActivePetId(availablePets[0].id)
   }, [availablePets, activePetId])
 
@@ -532,6 +537,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
   // false, and that effect returns early — so the connect itself is what has
   // to be re-driven, otherwise the outbox can never drain on its own.
   const runSyncRetry = () => {
+    appendSyncLog('retry_fired', {})
     if (!mountedRef.current || syncStatusRef.current !== 'error') return
     // Only a Sheet this device already remembers is retried on its own, on
     // every path: a first-time onboarding the user walked away from is not.
@@ -553,6 +559,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     if (!mountedRef.current) return
     const delay = SYNC_RETRY_DELAYS[syncRetryAttemptsRef.current] ?? SYNC_RETRY_DELAYS[SYNC_RETRY_DELAYS.length - 1]
     syncRetryAttemptsRef.current += 1
+    appendSyncLog('retry_scheduled', { attempt: syncRetryAttemptsRef.current, delayMs: delay })
     syncRetryTimerRef.current = window.setTimeout(() => {
       syncRetryTimerRef.current = 0
       runSyncRetry()
@@ -569,12 +576,18 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
       runSyncRetry()
     }
     const retryWhenVisible = () => { if (document.visibilityState === 'visible') retryNow() }
+    const logClosing = () => appendSyncLog('closing', { visibilityState: document.visibilityState, current: summarizeState(currentStateRef.current) })
+    const logClosingWhenHidden = () => { if (document.visibilityState === 'hidden') logClosing() }
     window.addEventListener('online', retryNow)
     document.addEventListener('visibilitychange', retryWhenVisible)
+    document.addEventListener('visibilitychange', logClosingWhenHidden)
+    window.addEventListener('pagehide', logClosing)
     return () => {
       mountedRef.current = false
       window.removeEventListener('online', retryNow)
       document.removeEventListener('visibilitychange', retryWhenVisible)
+      document.removeEventListener('visibilitychange', logClosingWhenHidden)
+      window.removeEventListener('pagehide', logClosing)
       clearSyncRetry()
     }
     // Mount-only: both handlers read live values from refs, so they never go stale.
@@ -596,6 +609,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     const timeout = window.setTimeout(() => {
       if (!isCurrentRemoteRevision(remoteRevisionRef.current, requestRevision)) return
       setSyncStatus('saving')
+      appendSyncLog('save_start', { revision: requestRevision, pending: summarizeState(pendingState) })
       setSyncError('')
       const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
       const queuedSave = remoteSaveQueueRef.current
@@ -611,6 +625,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           // mistake them for something this device deleted.
           saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(pendingState))
           syncRetryAttemptsRef.current = 0
+          appendSyncLog('save_success', { revision: requestRevision })
           clearSyncRetry()
           setSyncStatus('saved')
           setSyncError('')
@@ -620,6 +635,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })
           setSyncStatus('error')
           setSyncError(error.message || 'Google Sheet save failed')
+          appendSyncLog('save_error', { revision: requestRevision, message: redactSyncErrorMessage(error.message || String(error)) })
           scheduleSyncRetry()
         })
     }, 500)
@@ -633,18 +649,21 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     setRemoteReady(false)
     remoteReadyRef.current = false
     try {
+      appendSyncLog('connect_start', { mode: connection.mode || 'google', sheetSuffix: String(connection.spreadsheetId || '').slice(-6) })
       const remote = await loadRemoteState(connection.accessToken, connection.spreadsheetId, connection)
       // Connecting — to an existing Sheet or a brand-new one — must only ever
       // add data. The previous behaviour reset every collection for a new
       // Sheet and dropped the outbox, which erased local records on every
       // reconnect. Local records are carried into the new Sheet instead.
       const pendingState = unwrapPendingState(loadStoredState(window.localStorage, REMOTE_OUTBOX_KEY, null))
+      appendSyncLog('connect_remote_loaded', { remote: summarizeState(remote), hasPendingOutbox: Boolean(pendingState) })
       const fallback = { tracks, logs, activities, reminders, symptoms, pets, treatmentHistory, lineRecipients, activePetId, ...(pendingState || {}) }
       // Records from the Sheet get the same legacy-owner migration as local
       // ones. Without it an unowned row stays invisible forever once a second
       // pet exists, because belongsToPet only shows unowned records when there
       // is exactly one pet — the data was never lost, just unreachable.
       const hydrated = migrateLegacyOwners(hydrateRemoteState(remote, fallback, pendingState, bootBaselineRef.current))
+      appendSyncLog('connect_merged', { merged: summarizeState(hydrated), localBefore: summarizeState(fallback) })
       setTracks(hydrated.tracks)
       setLogs(hydrated.logs)
       setActivities(hydrated.activities ?? [])
@@ -674,6 +693,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     } catch (error) {
       setSyncStatus('error')
       setSyncError(error.message || 'โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ')
+      appendSyncLog('connect_failed', { message: redactSyncErrorMessage(error?.message || String(error)) })
       // Without this the outbox is stranded: remoteReady stays false, so the
       // save effect never runs and nothing else would ever try again. Only a
       // Sheet this device already remembers is retried on its own — a
@@ -1052,6 +1072,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
         if (!remote) return
         const baseline = loadStoredState(window.localStorage, SYNC_BASELINE_KEY, null)
         const merged = migrateLegacyOwners(hydrateRemoteState(remote, currentStateRef.current, null, baseline))
+        appendSyncLog('visibility_refresh_merged', { merged: summarizeState(merged), remote: summarizeState(remote) })
         setTracks(merged.tracks)
         setLogs(merged.logs)
         setActivities(merged.activities ?? [])
@@ -1063,6 +1084,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
         saveStoredState(window.localStorage, SYNC_BASELINE_KEY, snapshotBaseline(remote))
       } catch {
         // Keep working offline; the outbox still holds unsaved changes.
+        appendSyncLog('visibility_refresh_failed', {})
       }
     }
     document.addEventListener('visibilitychange', refreshFromRemote)
