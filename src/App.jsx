@@ -11,7 +11,7 @@ import { MAIN_APP_PAGES, mainPageFromSearch, mainPageHref } from './routes.js'
 import { exportLocalRecoveryBundle } from './sync/recovery.js'
 import { isRecoveryMode } from './sync/recoveryMode.js'
 import { compressPhotoToDataUrl } from './photo.js'
-import { appendSyncLog, summarizeState } from './syncDebugLog.js'
+import { appendSyncLog, redactSyncErrorMessage, summarizeState } from './syncDebugLog.js'
 import './index.css'
 import './appFeatures.css'
 
@@ -635,7 +635,7 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
           saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })
           setSyncStatus('error')
           setSyncError(error.message || 'Google Sheet save failed')
-          appendSyncLog('save_error', { revision: requestRevision, message: error.message || String(error) })
+          appendSyncLog('save_error', { revision: requestRevision, message: redactSyncErrorMessage(error.message || String(error)) })
           scheduleSyncRetry()
         })
     }, 500)
@@ -693,12 +693,12 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     } catch (error) {
       setSyncStatus('error')
       setSyncError(error.message || 'โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ')
+      appendSyncLog('connect_failed', { message: redactSyncErrorMessage(error?.message || String(error)) })
       // Without this the outbox is stranded: remoteReady stays false, so the
       // save effect never runs and nothing else would ever try again. Only a
       // Sheet this device already remembers is retried on its own — a
       // first-time onboarding failure stays the user's own attempt to repeat.
       if (googleConnectionRef.current) scheduleSyncRetry()
-      appendSyncLog('connect_failed', { message: error?.message || String(error) })
       throw error
     }
   }

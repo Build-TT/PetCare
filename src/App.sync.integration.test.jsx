@@ -209,4 +209,54 @@ describe('App remote sync integration', () => {
       expect(saveError.message).toContain('Google Sheet save failed: network down')
     })
   })
+
+  it('redacts a full spreadsheet id embedded in a rejection message before it reaches the sync debug log', async () => {
+    // Mirrors the shape apiFetch() in googleSheets.js throws on a Sheets API
+    // error: the full spreadsheet id sits in the URL pathname. Logging this
+    // verbatim would defeat the deliberate 6-char truncation used elsewhere
+    // (connect_start's sheetSuffix).
+    const fullSpreadsheetId = '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms'
+    saveRemoteStateMock.mockReset().mockRejectedValue(
+      new Error(`Google API error (429) [429 /v4/spreadsheets/${fullSpreadsheetId}/values:batchUpdate]`),
+    )
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => expect(saveRemoteStateMock).toHaveBeenCalled(), { timeout: 1500 })
+    await waitFor(() => {
+      const saveError = getSyncLog().find(entry => entry.event === 'save_error')
+      expect(saveError).toBeTruthy()
+      expect(saveError.message).not.toContain(fullSpreadsheetId)
+      expect(saveError.message).toContain('/v4/spreadsheets/…/values:batchUpdate')
+    })
+    // The full id must not appear anywhere in the persisted log, not just the
+    // one field asserted above.
+    expect(JSON.stringify(getSyncLog())).not.toContain(fullSpreadsheetId)
+  })
+
+  it('redacts a full spreadsheet id embedded in a connect-failure message before it reaches the sync debug log', async () => {
+    const fullSpreadsheetId = '1CyjNWt1YSB6oGNeLwCeCcKhVVrqumcs85PhwF3vqnt'
+    loadRemoteStateMock.mockReset().mockRejectedValue(
+      new Error(`Google API error (403) [403 /v4/spreadsheets/${fullSpreadsheetId}]`),
+    )
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => {
+      const connectFailed = getSyncLog().find(entry => entry.event === 'connect_failed')
+      expect(connectFailed).toBeTruthy()
+      expect(connectFailed.message).not.toContain(fullSpreadsheetId)
+    })
+    expect(JSON.stringify(getSyncLog())).not.toContain(fullSpreadsheetId)
+  })
 })

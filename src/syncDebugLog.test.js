@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendSyncLog, clearSyncLog, getSyncLog, summarizeState } from './syncDebugLog.js'
+import { appendSyncLog, clearSyncLog, getSyncLog, redactSyncErrorMessage, summarizeState } from './syncDebugLog.js'
 
 const KEY = 'petcare.sync-debug-log.v1'
 
@@ -70,11 +70,16 @@ describe('syncDebugLog', () => {
     expect(summary.counts).toEqual({
       logs: 2, symptoms: 1, activities: 3, tracks: 1, pets: 2, reminders: 0, treatmentHistory: 1,
     })
+    // 'symptoms' is deliberately excluded from the default id list: a
+    // legacy string-form symptom's id is stableId('symptom', label), an
+    // FNV-1a hash of the (small, guessable) Thai symptom vocabulary — so it
+    // is effectively reversible and would leak which symptoms a pet has.
+    // counts.symptoms above already covers diagnosing record loss.
     expect(summary.ids).toEqual({
       logs: ['log_1', 'log_2'],
-      symptoms: ['symptom_1'],
       activities: ['activity_1'],
     })
+    expect(summary.ids.symptoms).toBeUndefined()
     // Only id-lists for idKeys — no diary/label content anywhere in the summary.
     expect(JSON.stringify(summary)).not.toContain('label')
   })
@@ -84,7 +89,13 @@ describe('syncDebugLog', () => {
     expect(summary.counts).toEqual({
       logs: 0, symptoms: 0, activities: 0, tracks: 0, pets: 0, reminders: 0, treatmentHistory: 0,
     })
-    expect(summary.ids).toEqual({ logs: [], symptoms: [], activities: [] })
+    expect(summary.ids).toEqual({ logs: [], activities: [] })
+  })
+
+  it('summarizeState never includes symptom ids even when explicitly requested via idKeys default', () => {
+    // Regression guard: the default idKeys must not be reintroduced with 'symptoms'.
+    const summary = summarizeState({ symptoms: [{ id: 'symptom_1' }] })
+    expect(Object.keys(summary.ids)).not.toContain('symptoms')
   })
 
   it('summarizeState tolerates missing keys and does not throw', () => {
@@ -95,5 +106,46 @@ describe('syncDebugLog', () => {
   it('summarizeState only includes ids for the requested idKeys', () => {
     const summary = summarizeState({ tracks: [{ id: 'track_1' }] }, { idKeys: ['tracks'] })
     expect(summary.ids).toEqual({ tracks: ['track_1'] })
+  })
+
+  it('redactSyncErrorMessage strips a full spreadsheet id embedded in an API error path', () => {
+    const message = 'Google API error (429) [429 /v4/spreadsheets/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/values:batchUpdate]'
+    const redacted = redactSyncErrorMessage(message)
+    expect(redacted).not.toContain('1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms')
+    expect(redacted).toBe('Google API error (429) [429 /v4/spreadsheets/…/values:batchUpdate]')
+  })
+
+  it('redactSyncErrorMessage strips a full Drive file id embedded in an error path', () => {
+    const message = 'Google API error (404) [404 /drive/v3/files/1AbCdEfGhIjKlMnOpQrStUvWxYz]'
+    const redacted = redactSyncErrorMessage(message)
+    expect(redacted).not.toContain('1AbCdEfGhIjKlMnOpQrStUvWxYz')
+    expect(redacted).toBe('Google API error (404) [404 /drive/v3/files/…]')
+  })
+
+  it('redactSyncErrorMessage leaves an id-free message unchanged', () => {
+    expect(redactSyncErrorMessage('Network request failed')).toBe('Network request failed')
+  })
+
+  it('redactSyncErrorMessage tolerates null/undefined without throwing', () => {
+    expect(redactSyncErrorMessage(undefined)).toBe('')
+    expect(redactSyncErrorMessage(null)).toBe('')
+  })
+
+  it('appendSyncLog drops the oldest entries to keep the serialized log under the byte cap', () => {
+    // Each entry carries a sizeable id list (as connect_merged would for a
+    // large state) so the byte cap — not the 200-entry count cap — is what
+    // forces the trim here.
+    const bigIds = Array.from({ length: 200 }, (_, i) => `log_${1700000000000 + i}_${'x'.repeat(20)}`)
+    for (let i = 0; i < 50; i += 1) {
+      appendSyncLog('connect_merged', { i, merged: { ids: { logs: bigIds } } })
+    }
+    const log = getSyncLog()
+    const serialized = JSON.stringify(log)
+    expect(serialized.length).toBeLessThanOrEqual(200_000)
+    // The newest entry must survive the trim.
+    expect(log[log.length - 1].i).toBe(49)
+    // Some oldest entries were dropped to make room.
+    expect(log.length).toBeLessThan(50)
+    expect(log[0].i).toBeGreaterThan(0)
   })
 })
