@@ -26,10 +26,16 @@ const MAX_BYTES = 200_000
 
 // apiFetch() error messages embed the full spreadsheet or Drive file id in
 // the request path (e.g. "... /v4/spreadsheets/1BxiMVs0.../values:batchUpdate").
-// Redact that segment so a logged error message can never carry more of the
-// id than the deliberate 6-char suffix already used elsewhere (connect_start).
+// The path-segment pass handles every shape apiFetch() actually produces
+// today (including a "d/" interstitial, as in a spreadsheetUrl); the
+// id-shaped pass is defense-in-depth for messages that carry a bare id with
+// no recognizable path prefix (a future error string, a different Google
+// API surface) — both Sheets/Drive ids and OAuth tokens are long opaque
+// alphanumeric runs, so one pattern covers either.
 export function redactSyncErrorMessage(message) {
-  return String(message ?? '').replace(/\/(spreadsheets|files)\/[^/:?\s\]),]+/g, '/$1/…')
+  return String(message ?? '')
+    .replace(/\/(spreadsheets|files|file)\/(?:d\/)?[^/:?\s\]),]+/g, '/$1/…')
+    .replace(/\b[A-Za-z0-9_-]{25,}\b/g, '…')
 }
 
 // Every caller relies on this never throwing — a localStorage failure here

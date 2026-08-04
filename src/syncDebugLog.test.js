@@ -131,6 +131,18 @@ describe('syncDebugLog', () => {
     expect(redactSyncErrorMessage(null)).toBe('')
   })
 
+  it('redactSyncErrorMessage strips a spreadsheet id from a canonical Sheets URL with a "d/" interstitial', () => {
+    const message = 'Failed to open https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit'
+    const redacted = redactSyncErrorMessage(message)
+    expect(redacted).not.toContain('1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms')
+  })
+
+  it('redactSyncErrorMessage strips a bare id with no recognizable path prefix', () => {
+    const message = 'The user does not have sufficient permissions for file 1AbCdEfGhIjKlMnOpQrStUvWxYz01234.'
+    const redacted = redactSyncErrorMessage(message)
+    expect(redacted).not.toContain('1AbCdEfGhIjKlMnOpQrStUvWxYz01234')
+  })
+
   it('appendSyncLog drops the oldest entries to keep the serialized log under the byte cap', () => {
     // Each entry carries a sizeable id list (as connect_merged would for a
     // large state) so the byte cap — not the 200-entry count cap — is what
