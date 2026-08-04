@@ -26,6 +26,7 @@ vi.mock('./googleAuth.js', () => ({
 vi.mock('./googleSheets.js', () => ({ createOrFindPetCareSheet: createSheetMock, listPetCareSheets: vi.fn().mockResolvedValue([]) }))
 
 import App from './App.jsx'
+import { getSyncLog } from './syncDebugLog.js'
 
 function deferred() {
   let resolve
@@ -162,5 +163,50 @@ describe('App remote sync integration', () => {
     expect(saveRemoteStateMock.mock.calls.at(-1)[2].activities).toEqual([
       expect.objectContaining({ activity_type: 'เดิน', datetime: '2026-07-17T18:30', duration_minutes: '30', note: 'เดินรอบสวน' }),
     ])
+  })
+
+  it('records connect and save lifecycle events to the sync debug log on a successful connect and save', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => {
+      const events = getSyncLog().map(entry => entry.event)
+      expect(events).toContain('connect_start')
+      expect(events).toContain('connect_remote_loaded')
+      expect(events).toContain('connect_merged')
+    })
+
+    await waitFor(() => expect(saveRemoteStateMock).toHaveBeenCalled(), { timeout: 1500 })
+    await waitFor(() => {
+      const log = getSyncLog()
+      const saveStart = log.find(entry => entry.event === 'save_start')
+      const saveSuccess = log.find(entry => entry.event === 'save_success')
+      expect(saveStart).toBeTruthy()
+      expect(saveSuccess).toBeTruthy()
+      expect(saveSuccess.revision).toBe(saveStart.revision)
+    })
+  })
+
+  it('records a save_error entry with the rejection message when a save fails', async () => {
+    saveRemoteStateMock.mockReset().mockRejectedValue(new Error('Google Sheet save failed: network down'))
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+    fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+    await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+    await waitFor(() => expect(saveRemoteStateMock).toHaveBeenCalled(), { timeout: 1500 })
+    await waitFor(() => {
+      const saveError = getSyncLog().find(entry => entry.event === 'save_error')
+      expect(saveError).toBeTruthy()
+      expect(saveError.message).toContain('Google Sheet save failed: network down')
+    })
   })
 })

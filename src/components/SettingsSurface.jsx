@@ -4,6 +4,7 @@ import GoogleSheetMembers from './GoogleSheetMembers.jsx'
 import LineGroupSettings from './LineGroupSettings.jsx'
 import { getAccountBackendVersion } from '../accountAuth.js'
 import { APP_VERSION } from '../appVersion.js'
+import { clearSyncLog, getSyncLog } from '../syncDebugLog.js'
 
 export default function SettingsSurface({
   section,
@@ -41,6 +42,15 @@ export default function SettingsSurface({
   }, [])
 
   const back = () => onSectionChange('')
+  const downloadSyncDebugLog = () => {
+    const blob = new Blob([JSON.stringify(getSyncLog(), null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `petcare-sync-log-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
   // Name the side that is actually behind. The old copy always blamed the
   // backend, which sent people redeploying Apps Script when the web app was
   // the stale one.
@@ -64,6 +74,12 @@ export default function SettingsSurface({
       <button className="setting setting-action" onClick={() => onSectionChange('google')}><b>Google Sheet</b><small>เชื่อมต่อและจัดการการซิงก์ข้อมูล</small></button>
       {onLogout && <button className="setting setting-action settings-logout" type="button" onClick={onLogout}><b>ออกจากระบบ</b><small>ออกจากบัญชี PetCare บนอุปกรณ์นี้</small></button>}
       <section className="settings-version" aria-label="เวอร์ชันระบบ"><b>เวอร์ชันระบบ</b><small>Web app: {APP_VERSION}</small><small>Account backend: {backendVersion || (backendError ? 'ตรวจไม่ได้' : 'กำลังตรวจสอบ…')}</small><small className={backendError || backendVersion !== APP_VERSION ? 'danger' : ''}>{versionStatus}</small></section>
+      <section className="settings-version" aria-label="Sync debug log">
+        <b>Sync Debug Log</b>
+        <small>สำหรับแจ้งปัญหาการซิงก์ข้อมูลที่หายหรือไม่อัปเดต — ดาวน์โหลดแล้วส่งให้ทีมช่วยตรวจสอบ</small>
+        <button type="button" className="text-button" onClick={downloadSyncDebugLog}>ดาวน์โหลด Sync Debug Log</button>
+        <button type="button" className="text-button" onClick={clearSyncLog}>ล้าง Log</button>
+      </section>
     </section>
   }
 
