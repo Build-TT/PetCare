@@ -5,6 +5,7 @@ import LineGroupSettings from './LineGroupSettings.jsx'
 import { getAccountBackendVersion } from '../accountAuth.js'
 import { APP_VERSION } from '../appVersion.js'
 import { clearSyncLog, getSyncLog } from '../syncDebugLog.js'
+import { getStorageUsageReport } from '../storageUsage.js'
 
 export default function SettingsSurface({
   section,
@@ -32,6 +33,7 @@ export default function SettingsSurface({
 }) {
   const [backendVersion, setBackendVersion] = useState(null)
   const [backendError, setBackendError] = useState(false)
+  const [storageReport, setStorageReport] = useState(null)
 
   useEffect(() => {
     let active = true
@@ -79,6 +81,19 @@ export default function SettingsSurface({
         <small>สำหรับแจ้งปัญหาการซิงก์ข้อมูลที่หายหรือไม่อัปเดต — ดาวน์โหลดแล้วส่งให้ทีมช่วยตรวจสอบ</small>
         <button type="button" className="text-button" onClick={downloadSyncDebugLog}>ดาวน์โหลด Sync Debug Log</button>
         <button type="button" className="text-button" onClick={clearSyncLog}>ล้าง Log</button>
+      </section>
+      <section className="settings-version" aria-label="พื้นที่จัดเก็บในเครื่อง">
+        <b>พื้นที่จัดเก็บในเครื่อง</b>
+        <small>ตรวจสอบว่าข้อมูลใดในเครื่องนี้ใช้พื้นที่มากที่สุด — ไม่มีการส่งข้อมูลออกจากเครื่อง</small>
+        <button type="button" className="text-button" onClick={() => setStorageReport(getStorageUsageReport())}>เช็คพื้นที่จัดเก็บในเครื่อง</button>
+        {storageReport && <>
+          <small><b>รวม {Math.round(storageReport.totalChars / 1024)} KB</b></small>
+          {storageReport.entries.map(entry => <small key={entry.key}>{entry.key}: {Math.round(entry.chars / 1024)} KB</small>)}
+          {storageReport.petPhotoSizes?.length > 0 && <>
+            <small><b>ขนาดรูปสัตว์เลี้ยง</b></small>
+            {storageReport.petPhotoSizes.map(pet => <small key={pet.id}>{pet.name}: {Math.round(pet.photoChars / 1024)} KB</small>)}
+          </>}
+        </>}
       </section>
     </section>
   }

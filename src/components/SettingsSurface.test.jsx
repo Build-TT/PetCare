@@ -63,3 +63,26 @@ describe('SettingsSurface sync debug log', () => {
     expect(getSyncLog()).toEqual([])
   })
 })
+
+describe('SettingsSurface storage usage breakdown', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('computes and displays a storage usage breakdown, including per-pet photo sizes, when the button is clicked', () => {
+    window.localStorage.setItem('some.other.key', 'x'.repeat(2048))
+    window.localStorage.setItem('petcare.local.v1', JSON.stringify({
+      pets: [{ id: 'p1', name: 'มะลิ', photo: 'a'.repeat(1024) }],
+    }))
+
+    render(<SettingsSurface {...baseProps} />)
+    fireEvent.click(screen.getByRole('button', { name: 'เช็คพื้นที่จัดเก็บในเครื่อง' }))
+
+    expect(screen.getByText(/รวม \d+ KB/)).toBeTruthy()
+    expect(screen.getByText(/some\.other\.key: 2 KB/)).toBeTruthy()
+    expect(screen.getByText(/มะลิ: 1 KB/)).toBeTruthy()
+  })
+})
