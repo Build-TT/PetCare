@@ -3,6 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ErrorBoundary from './ErrorBoundary.jsx'
 import { clearSyncLog, getSyncLog } from '../syncDebugLog.js'
 
+// appendSyncLog swallows its own failures internally, so breaking localStorage
+// can never exercise componentDidCatch's guard — the throw is absorbed before
+// it gets there. Only replacing appendSyncLog itself with a throwing stub
+// tests the property that guard exists for.
+const { appendSyncLogMock } = vi.hoisted(() => ({ appendSyncLogMock: vi.fn() }))
+vi.mock('../syncDebugLog.js', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, appendSyncLog: appendSyncLogMock.mockImplementation((...args) => actual.appendSyncLog(...args)) }
+})
+
 function ThrowingChild() {
   throw new Error('setItem failed: QuotaExceededError')
 }
@@ -19,6 +29,7 @@ describe('ErrorBoundary', () => {
 
   afterEach(() => {
     consoleError.mockRestore()
+    vi.unstubAllGlobals()
     clearSyncLog()
   })
 
@@ -55,30 +66,39 @@ describe('ErrorBoundary', () => {
     expect(crash.message).toContain('/spreadsheets/…')
   })
 
-  it('still renders the fallback when crash logging itself fails', () => {
-    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
-      throw new Error('QuotaExceededError')
-    })
-    try {
-      expect(() => render(<ErrorBoundary><ThrowingChild /></ErrorBoundary>)).not.toThrow()
-      expect(screen.getByText('เกิดข้อผิดพลาดที่ไม่คาดคิด')).toBeTruthy()
-    } finally {
-      setItem.mockRestore()
+  it('records which subtree failed so an exported log can pinpoint the crash', () => {
+    function Inner() {
+      throw new Error('nested failure')
     }
+    function Outer() {
+      return <Inner />
+    }
+    render(<ErrorBoundary><Outer /></ErrorBoundary>)
+
+    const crash = getSyncLog().find(entry => entry.event === 'app_crashed')
+    expect(crash.componentStack).toBeTruthy()
+    expect(crash.componentStack).toContain('Inner')
+  })
+
+  it('still renders the fallback when crash logging itself throws', () => {
+    appendSyncLogMock.mockImplementationOnce(() => { throw new Error('boom') })
+
+    expect(() => render(<ErrorBoundary><ThrowingChild /></ErrorBoundary>)).not.toThrow()
+    expect(screen.getByText('เกิดข้อผิดพลาดที่ไม่คาดคิด')).toBeTruthy()
+    expect(appendSyncLogMock).toHaveBeenCalled()
   })
 
   it('reloads the page when the reload button is pressed', () => {
     const reload = vi.fn()
-    const original = window.location
-    delete window.location
-    window.location = { ...original, reload }
-    try {
-      render(<ErrorBoundary><ThrowingChild /></ErrorBoundary>)
-      fireEvent.click(screen.getByRole('button', { name: 'โหลดหน้าใหม่' }))
-      expect(reload).toHaveBeenCalled()
-    } finally {
-      window.location = original
-    }
+    // Stubbing the global avoids `delete window.location`, which leaves the
+    // suite order-dependent and throws in strict mode on a non-configurable
+    // property. vi.unstubAllGlobals() in afterEach puts it back.
+    vi.stubGlobal('location', { ...window.location, reload })
+
+    render(<ErrorBoundary><ThrowingChild /></ErrorBoundary>)
+    fireEvent.click(screen.getByRole('button', { name: 'โหลดหน้าใหม่' }))
+
+    expect(reload).toHaveBeenCalled()
   })
 
   it('only catches errors from its own subtree', () => {

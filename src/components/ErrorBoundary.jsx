@@ -17,7 +17,7 @@ export default class ErrorBoundary extends React.Component {
     return { hasError: true }
   }
 
-  componentDidCatch(error) {
+  componentDidCatch(error, info) {
     // Guarded on purpose: appendSyncLog already swallows its own failures, but
     // crash handling must not depend on that contract holding. A throw here
     // would escape to the next boundary up (there is none) and cost the user
@@ -25,6 +25,11 @@ export default class ErrorBoundary extends React.Component {
     try {
       appendSyncLog('app_crashed', {
         message: redactSyncErrorMessage(error?.message || String(error)),
+        // Which subtree failed is the fact a future crash is diagnosed from.
+        // React's componentStack contains component display names only — no
+        // props, no record content — so it clears the same privacy bar as the
+        // rest of this log. Bounded to 5 frames to respect the log's byte cap.
+        componentStack: String(info?.componentStack || '').trim().split('\n').slice(0, 5).join('\n'),
       })
     } catch {
       // Diagnostics are best-effort; the fallback UI is not.
