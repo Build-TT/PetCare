@@ -8,6 +8,7 @@ import ManageTypes from './liff/ManageTypes.jsx'
 import PetDetail from './pages/PetDetail.jsx'
 import { parseRoute } from './routes.js'
 import AccountGate from './components/AccountGate.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 import InstallAppPrompt from './components/InstallAppPrompt.jsx'
 import { clearAccountSession, getAccountSession, loadAccountProfile, saveAccountSession } from './accountAuth.js'
 import { isRecoveryMode } from './sync/recoveryMode.js'
@@ -69,7 +70,9 @@ function MainApp({ initialPage }) {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <div style={{ paddingBottom: 64 }}>
-      <Router />
+      <ErrorBoundary>
+        <Router />
+      </ErrorBoundary>
     </div>
   </React.StrictMode>
 )
