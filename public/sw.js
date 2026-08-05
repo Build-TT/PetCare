@@ -7,6 +7,24 @@
 const VERSION = '2026.08.03.1'
 const CACHE = `petcare-shell-${VERSION}`
 
+// Every deploy's content-hashed bundle filenames differ, so this cache only
+// ever grows unless the SW itself is reinstalled (VERSION bump) — which
+// happens only when the backend-compat version changes, not on every web
+// deploy. Bounding entry count here means storage stays capped regardless of
+// how many versionless deploys happen between SW refreshes.
+const MAX_ASSET_CACHE_ENTRIES = 40
+
+// cache.keys() yields entries in insertion order (a put removes any matching
+// entry before appending), so the head of the list is the oldest build's
+// asset. Trim to one below the cap so adding the new entry lands exactly at it.
+function evictOldestAssetCacheEntries(cache) {
+  return cache.keys().then(keys => {
+    const excess = keys.length - (MAX_ASSET_CACHE_ENTRIES - 1)
+    if (excess <= 0) return undefined
+    return Promise.all(keys.slice(0, excess).map(key => cache.delete(key)))
+  })
+}
+
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(['/', '/manifest.webmanifest'])))
   self.skipWaiting()
@@ -38,7 +56,7 @@ self.addEventListener('fetch', event => {
   // page in ways that look nothing like the network error that caused it.
   event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
     const copy = response.clone()
-    caches.open(CACHE).then(cache => cache.put(event.request, copy))
+    caches.open(CACHE).then(cache => evictOldestAssetCacheEntries(cache).then(() => cache.put(event.request, copy)))
     return response
   }).catch(() => new Response('', { status: 504, statusText: 'Offline' }))))
 })
