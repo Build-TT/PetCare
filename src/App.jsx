@@ -601,7 +601,21 @@ function App({ initialPage = 'home', accountSession = null, role = accountSessio
     const requestRevision = ++remoteRevisionRef.current
     const persistedPets = pets.filter(pet => !pet.demo)
     const pendingState = { tracks, logs, activities, reminders, symptoms, pets: persistedPets, treatmentHistory, lineRecipients, activePetId: persistedPets.some(pet => pet.id === activePetId) ? activePetId : '' }
-    saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })
+    // A failed outbox write can no longer crash the app, but it must not pass
+    // silently either — the debug log cannot record a storage failure through
+    // the same storage that just failed, so this in-memory error is the only
+    // signal there is. Skipping the network save is deliberate: never push
+    // state we could not durably record locally first, because a save that
+    // succeeds remotely and then fails here leaves nothing to resend. Setting
+    // 'error' also arms the existing retry, which re-runs this effect when the
+    // tab regains focus or the network returns.
+    if (!saveStoredState(window.localStorage, REMOTE_OUTBOX_KEY, { revision: requestRevision, state: pendingState })) {
+      if (isCurrentRemoteRevision(remoteRevisionRef.current, requestRevision)) {
+        setSyncStatus('error')
+        setSyncError('บันทึกข้อมูลลงเครื่องไม่สำเร็จ (พื้นที่จัดเก็บอาจเต็ม) — ข้อมูลจะไม่ถูกส่งไป Google Sheet จนกว่าจะแก้ไข')
+      }
+      return undefined
+    }
     if (isCurrentRemoteRevision(remoteRevisionRef.current, requestRevision)) {
       setSyncStatus('pending')
       setSyncError('')

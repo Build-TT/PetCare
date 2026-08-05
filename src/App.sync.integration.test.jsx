@@ -210,6 +210,37 @@ describe('App remote sync integration', () => {
     })
   })
 
+  it('surfaces a sync error and skips the network save when the outbox write fails', async () => {
+    // A failed outbox write is no longer a crash, but it must not be silent
+    // either: the debug log cannot record a storage failure through the same
+    // storage that just failed, so the in-memory sync error is the only signal
+    // the user (or a screenshot in a bug report) ever gets.
+    // Spied on the prototype: jsdom's localStorage is proxy-backed, so an
+    // own-property spy on the instance is not reliably consulted.
+    const realSetItem = Storage.prototype.setItem
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key === 'petcare.remote-outbox.v1') throw new Error('QuotaExceededError')
+      return realSetItem.call(this, key, value)
+    })
+    try {
+      render(<App />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'ตั้งค่า' }))
+      fireEvent.click(screen.getByRole('button', { name: /Google Sheet/ }))
+      fireEvent.click(screen.getByRole('checkbox'))
+      fireEvent.click(screen.getByRole('button', { name: /เชื่อมต่อ Google/ }))
+      await waitFor(() => expect(loadRemoteStateMock).toHaveBeenCalled())
+
+      await waitFor(() => expect(screen.getByText(/พื้นที่จัดเก็บอาจเต็ม/)).toBeTruthy())
+      // Well past the 500ms debounce: the network save must never be attempted
+      // with data that could not be durably recorded locally first.
+      await new Promise(resolve => window.setTimeout(resolve, 650))
+      expect(saveRemoteStateMock).not.toHaveBeenCalled()
+    } finally {
+      setItemSpy.mockRestore()
+    }
+  })
+
   it('redacts a full spreadsheet id embedded in a rejection message before it reaches the sync debug log', async () => {
     // Mirrors the shape apiFetch() in googleSheets.js throws on a Sheets API
     // error: the full spreadsheet id sits in the URL pathname. Logging this
